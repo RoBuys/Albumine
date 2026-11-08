@@ -9,6 +9,8 @@ vos photos restent dans vos dossiers, rien n'est déplacé ni modifié.
 ./build.sh && open Albumine.app
 ```
 
+L'icône est générée par `Resources/make-icon.swift` (relancer `swift Resources/make-icon.swift` après modification).
+
 Fonctionne avec les seuls Command Line Tools (Xcode non requis). macOS 14 minimum.
 
 ## Fonctions
