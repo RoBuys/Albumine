@@ -104,7 +104,7 @@ struct SidebarView: View {
                 }
             }
 
-            Section("Dossiers") {
+            Section {
                 ForEach(library.folders) { folder in
                     Label(folder.name, systemImage: "folder")
                         .badge(folder.count)
@@ -115,6 +115,12 @@ struct SidebarView: View {
                                 NSWorkspace.shared.selectFile(nil, inFileViewerRootedAtPath: folder.path)
                             }
                             if let root = library.root(containing: folder.path) {
+                                if folder.path != root.path {
+                                    Button("Exclure ce dossier de l'analyse") {
+                                        if case .folder(let p) = selection, p == folder.path { selection = .all }
+                                        library.excludeFolders([URL(fileURLWithPath: folder.path)])
+                                    }
+                                }
                                 Divider()
                                 Button("Retirer « \(root.lastPathComponent) » de la bibliothèque") {
                                     if case .folder(let p) = selection, p.hasPrefix(root.path) { selection = .all }
@@ -122,6 +128,14 @@ struct SidebarView: View {
                                 }
                             }
                         }
+                }
+            } header: {
+                HStack {
+                    Text("Dossiers")
+                    Spacer()
+                    SettingsLink { Image(systemName: "gearshape") }
+                        .buttonStyle(.borderless)
+                        .help("Gérer les dossiers analysés")
                 }
             }
         }
@@ -222,12 +236,20 @@ struct SidebarView: View {
                         .help("Arrêter")
                 }
             }
-            Button {
-                library.addFolderWithPanel()
-            } label: {
-                Label("Ajouter un dossier", systemImage: "plus")
+            HStack {
+                Button {
+                    library.addFolderWithPanel()
+                } label: {
+                    Label("Ajouter un dossier", systemImage: "plus")
+                }
+                .buttonStyle(.borderless)
+                Spacer()
+                SettingsLink {
+                    Label("Gérer…", systemImage: "folder.badge.gearshape")
+                }
+                .buttonStyle(.borderless)
+                .help("Dossiers analysés et exclusions (⌘,)")
             }
-            .buttonStyle(.borderless)
         }
         .padding(10)
         .frame(maxWidth: .infinity, alignment: .leading)

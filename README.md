@@ -15,7 +15,9 @@ Fonctionne avec les seuls Command Line Tools (Xcode non requis). macOS 14 minimu
 
 ## Fonctions
 
-- **Dossiers** : ajout (⌘O, bouton, glisser-déposer), analyse récursive, rescan (⌘R)
+- **Dossiers** : ajout (⌘O, bouton, glisser-déposer), analyse récursive, rescan (⌘R) ;
+  **Réglages (⌘,) › Dossiers** : liste des dossiers analysés (nombre d'éléments, disque branché ou non),
+  ajout, retrait, **exclusion de sous-dossiers** (aussi par clic droit sur un dossier)
 - **Grille** : miniatures rapides (taille réglable), **regroupement par dossier, par mois ou par année**
   (en-têtes épinglés, « Tout sélectionner »), tri par date de prise de vue ou par nom
 - **Vidéos** (MOV, MP4, M4V, 3GP… ; AVI/WMV listés et ouverts dans l'application par défaut) :

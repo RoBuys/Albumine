@@ -8,6 +8,8 @@ import AppKit
 @Observable
 final class PhotoLibrary {
     private(set) var roots: [URL] = []
+    /// Sous-dossiers exclus de l'analyse (chemins complets).
+    private(set) var excludedPaths: [String] = []
     /// Toutes les photos. Modifié par lots pendant la lecture des EXIF :
     /// évitez de le lire dans un `body` (préférez `revision`, `photoCount`, `photo(id:)`).
     private(set) var photos: [Photo] = []
@@ -118,6 +120,7 @@ final class PhotoLibrary {
         var metadata: [String: PhotoMetadata]
         var picasaImported: Bool?
         var albums: [String]?
+        var excluded: [String]?
     }
 
     init() {
@@ -180,8 +183,50 @@ final class PhotoLibrary {
 
     func removeRoot(_ root: URL) {
         roots.removeAll { $0.path == root.path }
+        excludedPaths.removeAll { $0.hasPrefix(root.path + "/") }
         save()
         rescan()
+    }
+
+    /// Exclut des sous-dossiers d'un dossier suivi (ils ne sont plus analysés ni affichés).
+    func excludeFolders(_ urls: [URL]) {
+        var changed = false
+        for url in urls {
+            let path = url.standardizedFileURL.path
+            guard root(containing: path) != nil, !roots.contains(where: { $0.path == path }),
+                  !PhotoScanner.isExcluded(path, excludedPaths) else { continue }
+            excludedPaths.removeAll { $0.hasPrefix(path + "/") }
+            excludedPaths.append(path)
+            changed = true
+        }
+        if changed {
+            excludedPaths.sort { $0.localizedStandardCompare($1) == .orderedAscending }
+            save()
+            rescan()
+        }
+    }
+
+    func excludeFolderWithPanel(in root: URL? = nil) {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.allowsMultipleSelection = true
+        panel.directoryURL = root ?? roots.first
+        panel.prompt = "Exclure"
+        panel.message = "Choisissez les sous-dossiers à ne plus analyser (ils doivent être dans un dossier suivi)"
+        if panel.runModal() == .OK { excludeFolders(panel.urls) }
+    }
+
+    func includeAgain(_ path: String) {
+        excludedPaths.removeAll { $0 == path }
+        save()
+        rescan()
+    }
+
+    /// Nombre d'éléments trouvés sous un dossier suivi.
+    func count(under root: URL) -> Int {
+        let prefix = root.path + "/"
+        return photos.reduce(0) { $0 + ($1.id.hasPrefix(prefix) ? 1 : 0) }
     }
 
     func root(containing path: String) -> URL? {
@@ -192,6 +237,7 @@ final class PhotoLibrary {
 
     func rescan() {
         let roots = self.roots
+        let excluded = self.excludedPaths
         scanGeneration += 1
         let generation = scanGeneration
         exifTask?.cancel()
@@ -204,9 +250,9 @@ final class PhotoLibrary {
             let start = Date()
             let result = await Task.detached(priority: .userInitiated) { () -> ScanResult in
                 let index = IndexStore.load()
-                var result = PhotoScanner.scan(reachable, index: index)
+                var result = PhotoScanner.scan(reachable, index: index, excluded: excluded)
                 // Disque débranché : on garde ses photos, d'après l'index (miniatures en cache).
-                for root in missing { result.photos += PhotoScanner.offlinePhotos(under: root, index: index) }
+                for root in missing { result.photos += PhotoScanner.offlinePhotos(under: root, index: index, excluded: excluded) }
                 return result
             }.value
             guard generation == scanGeneration else { return }
@@ -1271,11 +1317,12 @@ final class PhotoLibrary {
         }
         picasaImported = store.picasaImported ?? false
         albumNames = store.albums ?? []
+        excludedPaths = store.excluded ?? []
     }
 
     private func save() {
         let store = Store(roots: roots.map(\.path), metadata: metadata,
-                          picasaImported: picasaImported, albums: albumNames)
+                          picasaImported: picasaImported, albums: albumNames, excluded: excludedPaths)
         let url = storeURL
         Task.detached(priority: .utility) {
             var s = store

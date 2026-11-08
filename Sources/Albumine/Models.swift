@@ -321,7 +321,12 @@ enum PhotoScanner {
 
     /// Phase 1, rapide : liste les fichiers (sans les ouvrir). Les EXIF déjà connus
     /// sont repris de l'index si le fichier n'a pas changé.
-    static func scan(_ roots: [URL], index: [String: IndexStore.Entry]) -> ScanResult {
+    /// Le chemin est-il dans un sous-dossier exclu par l'utilisateur ?
+    static func isExcluded(_ path: String, _ excluded: [String]) -> Bool {
+        excluded.contains { path == $0 || path.hasPrefix($0 + "/") }
+    }
+
+    static func scan(_ roots: [URL], index: [String: IndexStore.Entry], excluded: [String] = []) -> ScanResult {
         let keys: [URLResourceKey] = [.isRegularFileKey, .fileSizeKey, .contentModificationDateKey]
         let keySet = Set(keys)
         var photos: [Photo] = []
@@ -334,6 +339,10 @@ enum PhotoScanner {
                 options: [.skipsHiddenFiles, .skipsPackageDescendants]
             ) else { continue }
             for case let url as URL in enumerator {
+                if !excluded.isEmpty, isExcluded(url.path, excluded) {
+                    enumerator.skipDescendants()
+                    continue
+                }
                 let ext = url.pathExtension.lowercased()
                 if ext == "xmp" { sidecars.append(url.path); continue }
                 guard allExtensions.contains(ext),
@@ -366,10 +375,10 @@ enum PhotoScanner {
     }
 
     /// Photos d'un disque débranché, reconstituées depuis l'index.
-    static func offlinePhotos(under root: URL, index: [String: IndexStore.Entry]) -> [Photo] {
+    static func offlinePhotos(under root: URL, index: [String: IndexStore.Entry], excluded: [String] = []) -> [Photo] {
         let prefix = root.path.hasSuffix("/") ? root.path : root.path + "/"
         return index.compactMap { path, e -> Photo? in
-            guard path.hasPrefix(prefix) else { return nil }
+            guard path.hasPrefix(prefix), !isExcluded(path, excluded) else { return nil }
             let url = URL(fileURLWithPath: path)
             let ext = url.pathExtension.lowercased()
             let folder = url.deletingLastPathComponent().path

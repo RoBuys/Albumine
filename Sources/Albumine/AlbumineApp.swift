@@ -47,5 +47,10 @@ struct AlbumineApp: App {
                 }
             }
         }
+
+        Settings {
+            SettingsView()
+                .environment(library)
+        }
     }
 }
