@@ -1,7 +1,8 @@
 import SwiftUI
 import AppKit
+import AVKit
 
-/// Visionneuse plein cadre : ← → pour naviguer, 0–5 pour noter, Échap pour fermer.
+/// Visionneuse plein cadre : ← → pour naviguer, 0–5 pour noter, F pour les visages, Échap pour fermer.
 struct ViewerView: View {
     @Environment(PhotoLibrary.self) private var library
     let photos: [Photo]
@@ -9,6 +10,7 @@ struct ViewerView: View {
     let onClose: () -> Void
 
     @Etat private var image: NSImage?
+    @Etat private var showFaces = false
     @FocusState private var focused: Bool
 
     private var photo: Photo { photos[index] }
@@ -17,10 +19,24 @@ struct ViewerView: View {
         ZStack {
             Color.black.opacity(0.96).ignoresSafeArea()
 
-            if let image {
+            if photo.isVideo {
+                VideoPane(url: photo.url)
+                    .padding(.horizontal, 70)
+                    .padding(.vertical, 60)
+            } else if let image {
                 Image(nsImage: image)
                     .resizable()
                     .scaledToFit()
+                    .overlay {
+                        if showFaces {
+                            FaceOverlay(faces: library.faces(of: photo).map { face in
+                                var f = face
+                                let r = library.faceRect(face, in: photo)
+                                (f.x, f.y, f.w, f.h) = (r.minX, r.minY, r.width, r.height)
+                                return f
+                            }, rotation: library.rotation(of: photo))
+                        }
+                    }
                     .padding(.horizontal, 70)
                     .padding(.vertical, 60)
             } else {
@@ -51,6 +67,15 @@ struct ViewerView: View {
                         }
                     }
                     Spacer()
+                    if !photo.isVideo {
+                        Button { showFaces.toggle() } label: {
+                            Image(systemName: showFaces ? "person.crop.square.fill" : "person.crop.square")
+                                .font(.title3)
+                        }
+                        .buttonStyle(.plain)
+                        .help("Afficher les visages (F)")
+                        .padding(.trailing, 8)
+                    }
                     Text("\(index + 1) / \(photos.count)")
                         .monospacedDigit()
                         .foregroundStyle(.white.opacity(0.6))
@@ -80,6 +105,10 @@ struct ViewerView: View {
         .onKeyPress(.leftArrow) { go(-1); return .handled }
         .onKeyPress(.rightArrow) { go(1); return .handled }
         .onKeyPress(.space) { go(1); return .handled }
+        .onKeyPress(characters: CharacterSet(charactersIn: "fF")) { _ in
+            showFaces.toggle()
+            return .handled
+        }
         .onKeyPress(characters: CharacterSet(charactersIn: "012345")) { press in
             guard let n = Int(press.characters) else { return .ignored }
             library.setRating(n, for: [photo])
@@ -88,6 +117,7 @@ struct ViewerView: View {
         .task(id: "\(library.rotation(of: photo))|\(photo.id)") {
             let url = photo.url
             let rotation = library.rotation(of: photo)
+            if photo.isVideo { image = nil; return }
             // Affiche d'abord la miniature en cache, puis l'image haute définition.
             image = ImageLoader.cached(url, maxPixel: ImageLoader.viewerPixels, rotation: rotation)
                 ?? ImageLoader.cached(url, maxPixel: ImageLoader.thumbnailPixels, rotation: rotation)
@@ -122,5 +152,73 @@ struct ViewerView: View {
         .buttonStyle(.plain)
         .foregroundStyle(.white.opacity(enabled ? 0.8 : 0.15))
         .disabled(!enabled)
+    }
+}
+
+/// Lecture d'une vidéo dans la visionneuse.
+struct VideoPane: View {
+    let url: URL
+    @Etat private var player: AVPlayer?
+    @Etat private var playable: Bool?
+
+    var body: some View {
+        Group {
+            if let player, playable == true {
+                VideoPlayer(player: player)
+            } else if playable == false {
+                VStack(spacing: 12) {
+                    Image(systemName: "film").font(.system(size: 48))
+                    Text("Ce format vidéo n'est pas lisible par macOS (\(url.pathExtension.uppercased())).")
+                    Button("Ouvrir avec l'application par défaut") { NSWorkspace.shared.open(url) }
+                }
+                .foregroundStyle(.white)
+            } else {
+                ProgressView().controlSize(.large)
+            }
+        }
+        .task(id: url) {
+            player?.pause()
+            player = nil
+            playable = nil
+            let ok = await VideoSupport.isPlayable(url)
+            guard !Task.isCancelled else { return }
+            playable = ok
+            if ok {
+                let p = AVPlayer(url: url)
+                player = p
+                p.play()
+            }
+        }
+        .onDisappear { player?.pause() }
+    }
+}
+
+/// Cadres des visages par-dessus la photo (coordonnées relatives, rotation d'affichage appliquée).
+struct FaceOverlay: View {
+    let faces: [FaceRegion]
+    let rotation: Int
+
+    var body: some View {
+        GeometryReader { geo in
+            ForEach(Array(faces.enumerated()), id: \.offset) { _, face in
+                let r = FaceGeometry.rotate(face.rect, by: rotation)
+                let frame = CGRect(x: r.minX * geo.size.width, y: r.minY * geo.size.height,
+                                   width: r.width * geo.size.width, height: r.height * geo.size.height)
+                RoundedRectangle(cornerRadius: 3)
+                    .stroke(face.name == nil ? Color.orange : Color.white, lineWidth: 2)
+                    .frame(width: frame.width, height: frame.height)
+                    .overlay(alignment: .bottom) {
+                        Text(face.name ?? face.suggestion.map { "\($0) ?" } ?? "?")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, 4)
+                            .background(.black.opacity(0.65), in: RoundedRectangle(cornerRadius: 3))
+                            .fixedSize()
+                            .offset(y: 20)
+                    }
+                    .position(x: frame.midX, y: frame.midY)
+            }
+        }
+        .allowsHitTesting(false)
     }
 }

@@ -4,9 +4,15 @@ import AppKit
 struct SidebarView: View {
     @Environment(PhotoLibrary.self) private var library
     @Binding var selection: SidebarItem?
+    /// Photos glissées sur un album (identifiants).
+    let onDropToAlbum: (_ album: String, _ ids: [String]) -> Void
+
+    @Etat private var creatingAlbum = false
+    @Etat private var renamingAlbum: String?
+    @Etat private var deletingAlbum: String?
+    @Etat private var albumName = ""
 
     var body: some View {
-        let tags = library.allTags
         List(selection: $selection) {
             Section("Bibliothèque") {
                 Label("Toutes les photos", systemImage: "photo.on.rectangle")
@@ -15,28 +21,58 @@ struct SidebarView: View {
                 Label("Étoilées", systemImage: "star")
                     .badge(library.starredCount)
                     .tag(SidebarItem.starred)
+                Label("Vidéos", systemImage: "film")
+                    .badge(library.videoCount)
+                    .tag(SidebarItem.videos)
+                Label("Carte", systemImage: "map")
+                    .badge(library.locatedCount)
+                    .tag(SidebarItem.map)
+                Label("Doublons", systemImage: "square.on.square")
+                    .badge(library.duplicateGroups.map { $0.count } ?? 0)
+                    .tag(SidebarItem.duplicates)
             }
 
-            if !library.allPeople.isEmpty {
-                Section("Personnes") {
-                    ForEach(library.allPeople, id: \.name) { person in
-                        Label(person.name, systemImage: "person.crop.circle")
-                            .badge(person.count)
-                            .tag(SidebarItem.person(person.name))
-                    }
+            Section("Personnes") {
+                Label("Visages à nommer", systemImage: "person.crop.circle.badge.questionmark")
+                    .badge(library.unnamedFaceCount)
+                    .tag(SidebarItem.unnamedFaces)
+                ForEach(library.allPeople, id: \.name) { person in
+                    Label(person.name, systemImage: "person.crop.circle")
+                        .badge(person.count)
+                        .tag(SidebarItem.person(person.name))
                 }
             }
 
-            if !library.allAlbums.isEmpty {
-                Section("Albums") {
-                    ForEach(library.allAlbums, id: \.name) { album in
-                        Label(album.name, systemImage: "rectangle.stack")
-                            .badge(album.count)
-                            .tag(SidebarItem.album(album.name))
-                    }
+            Section {
+                ForEach(library.allAlbums, id: \.name) { album in
+                    Label(album.name, systemImage: "rectangle.stack")
+                        .badge(album.count)
+                        .tag(SidebarItem.album(album.name))
+                        .dropDestination(for: String.self) { ids, _ in
+                            onDropToAlbum(album.name, ids)
+                            return true
+                        }
+                        .contextMenu {
+                            Button("Renommer…") { albumName = album.name; renamingAlbum = album.name }
+                            Button("Supprimer l'album…", role: .destructive) { deletingAlbum = album.name }
+                        }
+                }
+                if library.allAlbums.isEmpty {
+                    Text("Glissez des photos ici après avoir créé un album")
+                        .font(.caption)
+                        .foregroundStyle(.tertiary)
+                }
+            } header: {
+                HStack {
+                    Text("Albums")
+                    Spacer()
+                    Button { albumName = ""; creatingAlbum = true } label: { Image(systemName: "plus") }
+                        .buttonStyle(.borderless)
+                        .help("Nouvel album")
                 }
             }
 
+            let tags = library.allTags
             if !tags.isEmpty {
                 Section("Étiquettes") {
                     ForEach(tags, id: \.name) { tag in
@@ -69,30 +105,91 @@ struct SidebarView: View {
             }
         }
         .listStyle(.sidebar)
-        .safeAreaInset(edge: .bottom) {
-            HStack {
-                Button {
-                    library.addFolderWithPanel()
-                } label: {
-                    Label("Ajouter un dossier", systemImage: "plus")
+        .safeAreaInset(edge: .bottom) { status }
+        .alert("Nouvel album", isPresented: $creatingAlbum) {
+            TextField("Nom de l'album", text: $albumName)
+            Button("Créer") { library.createAlbum(albumName) }
+            Button("Annuler", role: .cancel) {}
+        } message: {
+            Text("Un album regroupe des photos de n'importe quels dossiers, sans les copier.")
+        }
+        .alert("Renommer l'album", isPresented: Binding(get: { renamingAlbum != nil },
+                                                        set: { if !$0 { renamingAlbum = nil } })) {
+            TextField("Nom de l'album", text: $albumName)
+            Button("Renommer") {
+                if let old = renamingAlbum {
+                    library.renameAlbum(old, to: albumName)
+                    if selection == .album(old) { selection = .album(albumName.trimmingCharacters(in: .whitespaces)) }
                 }
-                .buttonStyle(.borderless)
-                Spacer()
-                if library.isImportingPicasa {
-                    ProgressView().controlSize(.small)
-                    Text("Import Picasa…").font(.caption).foregroundStyle(.secondary)
-                } else if library.isScanning {
-                    ProgressView().controlSize(.small)
-                    Text("Analyse…").font(.caption).foregroundStyle(.secondary)
-                } else if library.isReadingExif {
-                    ProgressView(value: Double(library.exifDone), total: Double(library.exifTotal))
-                        .frame(width: 60)
-                    Text("Dates \(library.exifDone.formatted()) / \(library.exifTotal.formatted())")
-                        .font(.caption2).foregroundStyle(.secondary).monospacedDigit()
-                        .help("Lecture des dates de prise de vue en arrière-plan. Les photos sont triées par date de fichier en attendant.")
+                renamingAlbum = nil
+            }
+            Button("Annuler", role: .cancel) { renamingAlbum = nil }
+        }
+        .confirmationDialog("Supprimer l'album « \(deletingAlbum ?? "") » ?",
+                            isPresented: Binding(get: { deletingAlbum != nil },
+                                                 set: { if !$0 { deletingAlbum = nil } })) {
+            Button("Supprimer l'album", role: .destructive) {
+                if let name = deletingAlbum {
+                    if selection == .album(name) { selection = .all }
+                    library.deleteAlbum(name)
+                }
+                deletingAlbum = nil
+            }
+        } message: {
+            Text("Les photos ne sont pas supprimées, seulement retirées de cet album.")
+        }
+    }
+
+    /// Bas de la barre latérale : ajout de dossier et tâches en cours.
+    private var status: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            if library.isImportingPicasa {
+                progressRow("Import Picasa…", value: nil)
+            }
+            if library.isScanning {
+                progressRow("Analyse des dossiers…", value: nil)
+            } else if library.isReadingExif {
+                progressRow("Dates et lieux \(library.exifDone.formatted()) / \(library.exifTotal.formatted())",
+                            value: Double(library.exifDone) / Double(max(library.exifTotal, 1)))
+                    .help("Lecture des dates de prise de vue et du GPS en arrière-plan.")
+            }
+            if library.isFindingDuplicates {
+                progressRow("Doublons \(library.duplicateDone.formatted()) / \(library.duplicateTotal.formatted())",
+                            value: Double(library.duplicateDone) / Double(max(library.duplicateTotal, 1)))
+            }
+            if library.isTrashing {
+                progressRow("Mise à la corbeille…", value: nil)
+            }
+            if library.facePreparing {
+                progressRow("Visages : préparation des exemples…", value: nil)
+            } else if library.isAnalyzingFaces {
+                HStack {
+                    progressRow("Visages \(library.faceDone.formatted()) / \(library.faceTotal.formatted())",
+                                value: Double(library.faceDone) / Double(max(library.faceTotal, 1)))
+                    Button { library.cancelFaceAnalysis() } label: { Image(systemName: "stop.circle") }
+                        .buttonStyle(.borderless)
+                        .help("Arrêter")
                 }
             }
-            .padding(10)
+            Button {
+                library.addFolderWithPanel()
+            } label: {
+                Label("Ajouter un dossier", systemImage: "plus")
+            }
+            .buttonStyle(.borderless)
+        }
+        .padding(10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func progressRow(_ text: String, value: Double?) -> some View {
+        HStack(spacing: 6) {
+            if let value {
+                ProgressView(value: value).frame(width: 50)
+            } else {
+                ProgressView().controlSize(.small)
+            }
+            Text(text).font(.caption2).foregroundStyle(.secondary).monospacedDigit().lineLimit(1)
         }
     }
 }

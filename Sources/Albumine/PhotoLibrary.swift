@@ -26,6 +26,31 @@ final class PhotoLibrary {
     private(set) var allPeople: [(name: String, count: Int)] = []
     private(set) var allAlbums: [(name: String, count: Int)] = []
 
+    // Albums virtuels (liste conservée même quand un album est vide)
+    private(set) var albumNames: [String] = []
+
+    // Compteurs pour la barre latérale
+    private(set) var videoCount = 0
+    private(set) var locatedCount = 0
+    private(set) var unnamedFaceCount = 0
+
+    // Doublons
+    private(set) var duplicateGroups: [[String]]?
+    private(set) var duplicateKeepers: Set<String> = []
+    private(set) var isFindingDuplicates = false
+    private(set) var isTrashing = false
+    private(set) var duplicateDone = 0
+    private(set) var duplicateTotal = 0
+    /// Message à afficher (fin d'une opération longue).
+    var notice: String?
+
+    // Visages
+    private(set) var faceDone = 0
+    private(set) var faceTotal = 0
+    private(set) var facePreparing = false
+    @ObservationIgnored private var faceTask: Task<Void, Never>?
+    @ObservationIgnored private var faceRefs: FaceReferences?
+
     // Import Picasa
     private(set) var picasaFilesFound = 0
     private(set) var picasaImported = false
@@ -43,6 +68,7 @@ final class PhotoLibrary {
         var roots: [String]
         var metadata: [String: PhotoMetadata]
         var picasaImported: Bool?
+        var albums: [String]?
     }
 
     init() {
@@ -130,6 +156,7 @@ final class PhotoLibrary {
         for (i, p) in newPhotos.enumerated() { map[p.id] = i }
         indexByID = map
         recomputeFolders()
+        recomputeCounts()
         recomputeMetadataDerived()
         revision += 1
         detectPicasaFiles()
@@ -159,6 +186,9 @@ final class PhotoLibrary {
                     let i = pending[start + offset]
                     photos[i].captureDate = r.date
                     photos[i].camera = r.camera
+                    photos[i].orientation = r.orientation
+                    photos[i].latitude = r.latitude
+                    photos[i].longitude = r.longitude
                     photos[i].exifChecked = true
                 }
                 exifDone = end
@@ -171,6 +201,7 @@ final class PhotoLibrary {
             Debug.log("EXIF terminés")
             saveIndex()
             recomputeFolders()
+            recomputeCounts()
             revision += 1 // re-trie une seule fois avec les vraies dates
         }
     }
@@ -192,13 +223,20 @@ final class PhotoLibrary {
             .sorted { $0.latest > $1.latest }
     }
 
+    private func recomputeCounts() {
+        videoCount = photos.reduce(0) { $0 + ($1.isVideo ? 1 : 0) }
+        locatedCount = photos.reduce(0) { $0 + ($1.hasLocation ? 1 : 0) }
+    }
+
     private func recomputeMetadataDerived() {
         var tagCounts: [String: Int] = [:]
         var peopleCounts: [String: Int] = [:]
-        var albumCounts: [String: Int] = [:]
+        var albumCounts: [String: Int] = Dictionary(uniqueKeysWithValues: albumNames.map { ($0, 0) })
         var starred = 0
+        var unnamed = 0
         for (path, m) in metadata where indexByID[path] != nil {
             if m.rating > 0 { starred += 1 }
+            if m.hasUnnamedFaces { unnamed += 1 }
             for t in m.tags { tagCounts[t, default: 0] += 1 }
             for p in m.people { peopleCounts[p, default: 0] += 1 }
             for a in m.albums { albumCounts[a, default: 0] += 1 }
@@ -208,6 +246,7 @@ final class PhotoLibrary {
                 .sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
         }
         starredCount = starred
+        unnamedFaceCount = unnamed
         allTags = sorted(tagCounts)
         allPeople = sorted(peopleCounts)
         allAlbums = sorted(albumCounts)
@@ -222,6 +261,12 @@ final class PhotoLibrary {
     func caption(of photo: Photo) -> String { metadata[photo.id]?.caption ?? "" }
     func rotation(of photo: Photo) -> Int { metadata[photo.id]?.rotation ?? 0 }
     func faces(of photo: Photo) -> [FaceRegion] { metadata[photo.id]?.faces ?? [] }
+
+    /// Zone d'un visage dans l'image orientée selon l'EXIF, sans la rotation d'affichage.
+    /// (Les visages Picasa sont exprimés dans l'image brute du capteur : on les convertit.)
+    func faceRect(_ face: FaceRegion, in photo: Photo) -> CGRect {
+        face.raw == true ? FaceGeometry.applyOrientation(face.rect, photo.orientation) : face.rect
+    }
 
     /// Pivote l'affichage d'un quart de tour (+1 horaire, -1 antihoraire). Le fichier n'est pas modifié.
     func rotate(_ photos: [Photo], by quarterTurns: Int) {
@@ -337,7 +382,9 @@ final class PhotoLibrary {
                 if let c = imp.caption, m.caption.isEmpty { m.caption = c; summary.captions += 1 }
                 for name in imp.people where !m.people.contains(name) { m.people.append(name) }
                 for album in imp.albums where !m.albums.contains(album) { m.albums.append(album) }
-                if m.faces.isEmpty { m.faces = imp.faces }
+                // Remplace les visages d'un import précédent (pas ceux détectés ou nommés dans Albumine).
+                let fromPicasaOnly = !m.facesAnalyzed && m.faces.allSatisfy { $0.suggestion == nil && $0.score == nil }
+                if m.faces.isEmpty || (fromPicasaOnly && m.faces != imp.faces) { m.faces = imp.faces }
                 m.people.sort { $0.localizedStandardCompare($1) == .orderedAscending }
                 summary.namedFaces += imp.faces.filter { $0.name != nil }.count
                 summary.people.formUnion(imp.people)
@@ -347,12 +394,304 @@ final class PhotoLibrary {
                     summary.photos += 1
                 }
             }
+            for album in summary.albums where !albumNames.contains(album) { albumNames.append(album) }
+            albumNames.sort { $0.localizedStandardCompare($1) == .orderedAscending }
             Debug.log("import Picasa : \(fileCount) fichiers, \(imported.count) entrées, \(summary.photos) photos, \(Date().timeIntervalSince(start)) s")
             picasaImported = true
             metadataChanged()
             isImportingPicasa = false
             picasaSummary = summary
         }
+    }
+
+    // MARK: Albums virtuels
+
+    /// Crée un album (éventuellement avec des photos). Une photo peut être dans plusieurs albums,
+    /// sans être copiée.
+    func createAlbum(_ raw: String, with photos: [Photo] = []) {
+        let name = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty else { return }
+        if !albumNames.contains(name) {
+            albumNames.append(name)
+            albumNames.sort { $0.localizedStandardCompare($1) == .orderedAscending }
+        }
+        if photos.isEmpty { metadataChanged() } else { addPhotos(photos, toAlbum: name) }
+    }
+
+    func addPhotos(_ photos: [Photo], toAlbum name: String) {
+        if !albumNames.contains(name) { albumNames.append(name) }
+        for p in photos where !(metadata[p.id]?.albums.contains(name) ?? false) {
+            metadata[p.id, default: PhotoMetadata()].albums.append(name)
+        }
+        metadataChanged()
+    }
+
+    func removePhotos(_ photos: [Photo], fromAlbum name: String) {
+        for p in photos { metadata[p.id]?.albums.removeAll { $0 == name } }
+        metadataChanged()
+    }
+
+    func renameAlbum(_ old: String, to raw: String) {
+        let name = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty, name != old else { return }
+        albumNames.removeAll { $0 == old }
+        if !albumNames.contains(name) { albumNames.append(name) }
+        albumNames.sort { $0.localizedStandardCompare($1) == .orderedAscending }
+        for key in metadata.keys where metadata[key]!.albums.contains(old) {
+            var albums = metadata[key]!.albums.map { $0 == old ? name : $0 }
+            albums = albums.enumerated().filter { albums.firstIndex(of: $0.element) == $0.offset }.map(\.element)
+            metadata[key]!.albums = albums
+        }
+        metadataChanged()
+    }
+
+    /// Supprime l'album ; les photos ne sont pas touchées.
+    func deleteAlbum(_ name: String) {
+        albumNames.removeAll { $0 == name }
+        for key in metadata.keys where metadata[key]!.albums.contains(name) {
+            metadata[key]!.albums.removeAll { $0 == name }
+        }
+        metadataChanged()
+    }
+
+    // MARK: Doublons
+
+    func findDuplicates() {
+        guard !isFindingDuplicates else { return }
+        let candidates = DuplicateFinder.sameSizeCandidates(photos)
+        let items = candidates.map { (id: $0.id, url: $0.url, size: $0.fileSize) }
+        let generation = scanGeneration
+        isFindingDuplicates = true
+        duplicateDone = 0
+        duplicateTotal = items.count
+        Task {
+            var byHash: [String: [String]] = [:]
+            var start = 0
+            while start < items.count {
+                while !(await ImageLoader.limiter.isIdle) { try? await Task.sleep(for: .milliseconds(150)) }
+                guard generation == scanGeneration else { isFindingDuplicates = false; return }
+                let end = min(start + 64, items.count)
+                let batch = Array(items[start..<end])
+                let results = await Task.detached(priority: .utility) { DuplicateFinder.hashes(batch) }.value
+                for r in results { if let h = r.hash { byHash[h, default: []].append(r.id) } }
+                start = end
+                duplicateDone = end
+            }
+            setDuplicateGroups(byHash.values.filter { $0.count > 1 }.map { $0.sorted(by: keeperFirst) })
+            isFindingDuplicates = false
+            let waste = duplicateWaste
+            notice = waste.count == 0
+                ? "Aucun doublon trouvé."
+                : "\(duplicateGroups?.count ?? 0) groupes de doublons : \(waste.count) copies en trop (\(ByteCountFormatter.string(fromByteCount: waste.bytes, countStyle: .file)))."
+        }
+    }
+
+    private func setDuplicateGroups(_ groups: [[String]]) {
+        duplicateGroups = groups.sorted {
+            (photo(id: $0[0])?.fileSize ?? 0) * Int64($0.count) > (photo(id: $1[0])?.fileSize ?? 0) * Int64($1.count)
+        }
+        duplicateKeepers = Set(groups.compactMap(\.first))
+        revision += 1
+    }
+
+    /// Ordre de préférence de la copie à garder : la plus annotée, puis la plus ancienne, puis le chemin le plus court.
+    private func keeperFirst(_ a: String, _ b: String) -> Bool {
+        let ra = metadata[a]?.richness ?? 0, rb = metadata[b]?.richness ?? 0
+        if ra != rb { return ra > rb }
+        let da = photo(id: a)?.modificationDate ?? .distantFuture, db = photo(id: b)?.modificationDate ?? .distantFuture
+        if da != db { return da < db }
+        return a.count < b.count
+    }
+
+    var duplicateWaste: (count: Int, bytes: Int64) {
+        var count = 0
+        var bytes: Int64 = 0
+        for g in duplicateGroups ?? [] {
+            for id in g.dropFirst() { count += 1; bytes += photo(id: id)?.fileSize ?? 0 }
+        }
+        return (count, bytes)
+    }
+
+    /// Met à la corbeille toutes les copies (récupérables depuis la Corbeille du disque).
+    /// Chaque copie est d'abord comparée octet par octet à la photo gardée ; ses notes,
+    /// étiquettes, personnes et albums sont reportés sur la photo gardée.
+    func trashDuplicateCopies() {
+        guard let groups = duplicateGroups, !isTrashing else { return }
+        let plan: [(keep: URL, keepID: String, copies: [(id: String, url: URL)])] = groups.compactMap { g in
+            guard let keep = photo(id: g[0]) else { return nil }
+            return (keep.url, keep.id, g.dropFirst().compactMap { id in photo(id: id).map { (id, $0.url) } })
+        }
+        isTrashing = true
+        Task {
+            let trashed = await Task.detached(priority: .userInitiated) { () -> [(kept: String, copy: String, size: Int64)] in
+                var done: [(String, String, Int64)] = []
+                for g in plan {
+                    for c in g.copies where DuplicateFinder.identical(g.keep, c.url) {
+                        let size = (try? c.url.resourceValues(forKeys: [.fileSizeKey]).fileSize).flatMap { $0 } ?? 0
+                        if (try? FileManager.default.trashItem(at: c.url, resultingItemURL: nil)) != nil {
+                            done.append((g.keepID, c.id, Int64(size)))
+                        }
+                    }
+                }
+                return done
+            }.value
+            for t in trashed {
+                if let m = metadata[t.copy] {
+                    metadata[t.kept, default: PhotoMetadata()].merge(m)
+                    metadata[t.copy] = nil
+                }
+            }
+            let removed = Set(trashed.map(\.copy))
+            removeFromLibrary(removed)
+            setDuplicateGroups(groups.map { $0.filter { !removed.contains($0) } }.filter { $0.count > 1 })
+            isTrashing = false
+            let bytes = trashed.reduce(Int64(0)) { $0 + $1.size }
+            let skipped = plan.reduce(0) { $0 + $1.copies.count } - trashed.count
+            notice = "\(trashed.count) copies mises à la corbeille (\(ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file)) libérés)."
+                + (skipped > 0 ? " \(skipped) fichiers gardés : contenu différent ou corbeille indisponible." : "")
+            metadataChanged()
+        }
+    }
+
+    /// Met des photos à la corbeille (récupérables).
+    func trash(_ photos: [Photo]) {
+        let urls = photos.map { ($0.id, $0.url) }
+        Task {
+            let done = await Task.detached { urls.filter { (try? FileManager.default.trashItem(at: $0.1, resultingItemURL: nil)) != nil }.map(\.0) }.value
+            for id in done { metadata[id] = nil }
+            removeFromLibrary(Set(done))
+            if done.count < urls.count { notice = "\(urls.count - done.count) fichiers n'ont pas pu être mis à la corbeille." }
+            metadataChanged()
+        }
+    }
+
+    /// Retire des photos de la liste sans relire le disque (la lecture des EXIF reprend ensuite).
+    private func removeFromLibrary(_ ids: Set<String>) {
+        guard !ids.isEmpty else { return }
+        exifTask?.cancel()
+        scanGeneration += 1
+        setPhotos(photos.filter { !ids.contains($0.id) })
+        let pending = photos.indices.filter { !photos[$0].exifChecked }
+        if !pending.isEmpty { startExifPass(pending, generation: scanGeneration) }
+    }
+
+    // MARK: Visages
+
+    var isAnalyzingFaces: Bool { faceTotal > 0 && faceDone < faceTotal }
+
+    func cancelFaceAnalysis() {
+        faceTask?.cancel()
+    }
+
+    /// Détecte les visages des photos de la liste qui n'ont pas encore été analysées,
+    /// et propose un nom à partir des visages déjà nommés.
+    func analyzeFaces(in list: [Photo]) {
+        guard !isAnalyzingFaces, !facePreparing else { return }
+        let targets = list.filter { p in
+            guard !p.isVideo else { return false }
+            let m = metadata[p.id]
+            return !(m?.facesAnalyzed ?? false) && (m?.faces.isEmpty ?? true)
+        }
+        guard !targets.isEmpty else {
+            notice = "Les visages de ces photos ont déjà été analysés."
+            return
+        }
+        let items = targets.map { (id: $0.id, url: $0.url, rotation: rotation(of: $0)) }
+
+        // Exemples : pour chaque personne, ses plus grands visages nommés.
+        var examples: [String: [(url: URL, rotation: Int, rect: CGRect)]] = [:]
+        for (path, m) in metadata where indexByID[path] != nil {
+            guard let p = photo(id: path), !p.isVideo else { continue }
+            for f in m.faces where f.w >= 0.05 { if let n = f.name { examples[n, default: []].append((p.url, m.rotation, faceRect(f, in: p))) } }
+        }
+        for (n, list) in examples {
+            examples[n] = Array(list.sorted { $0.rect.width > $1.rect.width }.prefix(FaceReferences.samplesPerPerson * 3).shuffled()
+                .prefix(FaceReferences.samplesPerPerson))
+        }
+
+        facePreparing = true
+        faceTask = Task {
+            let refs: FaceReferences
+            if let r = faceRefs { refs = r } else { refs = await Task.detached { FaceReferences.load() }.value }
+            faceRefs = refs
+            let missing = examples.filter { !refs.people.contains($0.key) }
+            if !missing.isEmpty {
+                await Task.detached(priority: .utility) {
+                    for (name, list) in missing {
+                        for e in list {
+                            if let fp = FaceEngine.referencePrint(url: e.url, rotation: e.rotation, rect: e.rect) { refs.add(fp, for: name) }
+                        }
+                    }
+                    refs.save()
+                }.value
+            }
+            facePreparing = false
+            faceTotal = items.count
+            faceDone = 0
+            var found = 0, suggested = 0
+            var start = 0
+            while start < items.count, !Task.isCancelled {
+                while !(await ImageLoader.limiter.isIdle) { try? await Task.sleep(for: .milliseconds(150)) }
+                let end = min(start + 6, items.count)
+                let batch = Array(items[start..<end])
+                let results = await Task.detached(priority: .utility) {
+                    batch.map { (id: $0.id, faces: FaceEngine.analyze(url: $0.url, rotation: $0.rotation, references: refs)) }
+                }.value
+                for r in results {
+                    var m = metadata[r.id] ?? PhotoMetadata()
+                    m.faces = r.faces
+                    m.facesAnalyzed = true
+                    metadata[r.id] = m
+                    found += r.faces.count
+                    suggested += r.faces.filter { $0.suggestion != nil }.count
+                }
+                faceDone = end
+                start = end
+                if start % 300 < 6 { save() }
+            }
+            faceTotal = 0
+            faceDone = 0
+            metadataChanged()
+            notice = "Analyse des visages\(Task.isCancelled ? " interrompue" : " terminée") : \(found) visages trouvés, \(suggested) noms proposés. Ils sont dans « Visages à nommer »."
+        }
+    }
+
+    /// Donne un nom à un visage (et l'ajoute aux exemples de cette personne).
+    func nameFace(_ photo: Photo, at index: Int, as raw: String) {
+        let name = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty, var m = metadata[photo.id], m.faces.indices.contains(index) else { return }
+        m.faces[index].name = name
+        m.faces[index].suggestion = nil
+        m.faces[index].score = nil
+        if !m.people.contains(name) {
+            m.people.append(name)
+            m.people.sort { $0.localizedStandardCompare($1) == .orderedAscending }
+        }
+        metadata[photo.id] = m
+        metadataChanged()
+        let (url, rotation, rect) = (photo.url, m.rotation, faceRect(m.faces[index], in: photo))
+        Task.detached(priority: .utility) { [faceRefs] in
+            guard let refs = faceRefs, let fp = FaceEngine.referencePrint(url: url, rotation: rotation, rect: rect) else { return }
+            refs.add(fp, for: name)
+            refs.save()
+        }
+    }
+
+    func acceptSuggestions(in photos: [Photo]) {
+        for p in photos {
+            for (i, f) in faces(of: p).enumerated() where f.name == nil {
+                if let s = f.suggestion { nameFace(p, at: i, as: s) }
+            }
+        }
+    }
+
+    /// Retire un visage (fausse détection) ; la personne n'est retirée que si plus aucun visage ne la porte.
+    func removeFace(_ photo: Photo, at index: Int) {
+        guard var m = metadata[photo.id], m.faces.indices.contains(index) else { return }
+        let removed = m.faces.remove(at: index)
+        if let n = removed.name, !m.faces.contains(where: { $0.name == n }) { m.people.removeAll { $0 == n } }
+        metadata[photo.id] = m
+        metadataChanged()
     }
 
     // MARK: Persistance
@@ -362,12 +701,20 @@ final class PhotoLibrary {
               let store = try? JSONDecoder().decode(Store.self, from: data) else { return }
         roots = store.roots.map { URL(fileURLWithPath: $0, isDirectory: true) }
         metadata = store.metadata
+        // Migration : les visages importés de Picasa avant la v0.3 n'avaient pas l'indicateur « raw ».
+        for key in metadata.keys where !metadata[key]!.facesAnalyzed {
+            for i in metadata[key]!.faces.indices where metadata[key]!.faces[i].raw == nil
+                && metadata[key]!.faces[i].suggestion == nil && metadata[key]!.faces[i].score == nil {
+                metadata[key]!.faces[i].raw = true
+            }
+        }
         picasaImported = store.picasaImported ?? false
+        albumNames = store.albums ?? []
     }
 
     private func save() {
         let store = Store(roots: roots.map(\.path), metadata: metadata.filter { !$0.value.isEmpty },
-                          picasaImported: picasaImported)
+                          picasaImported: picasaImported, albums: albumNames)
         let encoder = JSONEncoder()
         if let data = try? encoder.encode(store) { try? data.write(to: storeURL, options: .atomic) }
     }

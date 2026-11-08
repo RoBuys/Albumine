@@ -19,6 +19,8 @@ enum PicasaImporter {
     static let fileNames = [".picasa.ini", "Picasa.ini", "picasa.ini"]
     /// Identifiant Picasa d'un visage détecté mais jamais nommé.
     static let unknownFace = "ffffffffffffffff"
+    /// Picasa exprime les visages dans l'image brute (avant orientation EXIF) — voir FaceGeometry.
+    static let rawCoordinates: Bool? = true
 
     struct Face {
         var contact: String
@@ -85,11 +87,11 @@ enum PicasaImporter {
                 for face in e.faces where face.contact != unknownFace {
                     let name = contacts[face.contact]
                     if let name, !imp.people.contains(name) { imp.people.append(name) }
-                    imp.faces.append(FaceRegion(name: name, x: face.x, y: face.y, w: face.w, h: face.h))
+                    imp.faces.append(FaceRegion(name: name, x: face.x, y: face.y, w: face.w, h: face.h, raw: rawCoordinates))
                 }
                 // Visages jamais nommés : on garde la zone, sans nom.
                 for face in e.faces where face.contact == unknownFace {
-                    imp.faces.append(FaceRegion(name: nil, x: face.x, y: face.y, w: face.w, h: face.h))
+                    imp.faces.append(FaceRegion(name: nil, x: face.x, y: face.y, w: face.w, h: face.h, raw: rawCoordinates))
                 }
                 let path = (f.folder as NSString).appendingPathComponent(fileName)
                 result[path] = imp

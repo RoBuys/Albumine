@@ -8,6 +8,8 @@ struct InspectorView: View {
 
     @Etat private var newTag = ""
     @Etat private var captionDraft = ""
+    @Etat private var faceToName: Int?
+    @Etat private var faceNameDraft = ""
     @Etat private var info: PhotoInfo?
 
     var body: some View {
@@ -20,6 +22,7 @@ struct InspectorView: View {
                     header
                     ratingSection
                     if photos.count == 1 { captionSection(photos[0]) }
+                    if photos.count == 1 { facesSection(photos[0]) }
                     peopleSection
                     albumsSection
                     tagsSection
@@ -79,6 +82,68 @@ struct InspectorView: View {
                 .onSubmit { library.setCaption(captionDraft, for: photo) }
         }
         .onChange(of: photo.id, initial: true) { captionDraft = library.caption(of: photo) }
+    }
+
+    @ViewBuilder
+    private func facesSection(_ photo: Photo) -> some View {
+        let faces = library.faces(of: photo)
+        if !faces.isEmpty {
+            VStack(alignment: .leading, spacing: 8) {
+                sectionTitle("Visages (\(faces.count))")
+                ForEach(Array(faces.enumerated()), id: \.offset) { i, face in
+                    HStack(spacing: 8) {
+                        FaceCropView(url: photo.url, rect: library.faceRect(face, in: photo),
+                                     rotation: library.rotation(of: photo))
+                            .frame(width: 40, height: 40)
+                            .clipShape(Circle())
+                        if let n = face.name {
+                            Text(n)
+                        } else if let s = face.suggestion {
+                            Text("\(s) ?").foregroundStyle(.orange).help("Nom proposé, à confirmer")
+                        } else {
+                            Text("Inconnu").foregroundStyle(.secondary)
+                        }
+                        Spacer()
+                        if face.name == nil, let s = face.suggestion {
+                            Button { library.nameFace(photo, at: i, as: s) } label: { Image(systemName: "checkmark.circle") }
+                                .buttonStyle(.borderless)
+                                .help("Confirmer « \(s) »")
+                        }
+                        Menu {
+                            ForEach(library.allPeople.map(\.name), id: \.self) { n in
+                                Button(n) { library.nameFace(photo, at: i, as: n) }
+                            }
+                            Divider()
+                            Button("Autre nom…") { faceNameDraft = ""; faceToName = i }
+                        } label: {
+                            Image(systemName: "pencil")
+                        }
+                        .menuStyle(.borderlessButton)
+                        .fixedSize()
+                        .help("Nommer ce visage")
+                        Button { library.removeFace(photo, at: i) } label: { Image(systemName: "xmark.circle") }
+                            .buttonStyle(.borderless)
+                            .help("Retirer (ce n'est pas un visage)")
+                    }
+                }
+            }
+            .alert("Nommer ce visage", isPresented: Binding(get: { faceToName != nil },
+                                                            set: { if !$0 { faceToName = nil } })) {
+                TextField("Prénom Nom", text: $faceNameDraft)
+                Button("OK") {
+                    if let i = faceToName { library.nameFace(photo, at: i, as: faceNameDraft) }
+                    faceToName = nil
+                }
+                Button("Annuler", role: .cancel) { faceToName = nil }
+            }
+        } else if !photo.isVideo {
+            Button {
+                library.analyzeFaces(in: [photo])
+            } label: {
+                Label("Détecter les visages", systemImage: "person.crop.rectangle")
+            }
+            .disabled(library.isAnalyzingFaces)
+        }
     }
 
     @ViewBuilder
@@ -212,6 +277,33 @@ struct InspectorView: View {
         GridRow {
             Text(label).foregroundStyle(.secondary)
             Text(value).textSelection(.enabled)
+        }
+    }
+}
+
+/// Vignette ronde d'un visage, découpée dans la miniature.
+struct FaceCropView: View {
+    let url: URL
+    /// Zone dans l'image orientée EXIF (sans rotation d'affichage).
+    let rect: CGRect
+    let rotation: Int
+    @Etat private var image: NSImage?
+
+    var body: some View {
+        ZStack {
+            if let image {
+                Image(nsImage: image).resizable().scaledToFill()
+            } else {
+                Circle().fill(.quaternary)
+                Image(systemName: "person.fill").foregroundStyle(.secondary)
+            }
+        }
+        .task(id: "\(url.path)|\(rect.minX)|\(rect.minY)|\(rotation)") {
+            guard let base = await ImageLoader.load(url, maxPixel: ImageLoader.thumbnailPixels),
+                  let cg = base.cgImage(forProposedRect: nil, context: nil, hints: nil),
+                  let crop = FaceEngine.crop(cg, face: rect, margin: 0.15) else { return }
+            let upright = ImageDecoding.rotate(crop, rotation)
+            image = NSImage(cgImage: upright, size: NSSize(width: upright.width, height: upright.height))
         }
     }
 }

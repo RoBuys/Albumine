@@ -11,16 +11,28 @@ vos photos restent dans vos dossiers, rien n'est déplacé ni modifié.
 
 Fonctionne avec les seuls Command Line Tools (Xcode non requis). macOS 14 minimum.
 
-## Fonctions (v0.1)
+## Fonctions
 
-- Ajout de dossiers (⌘O, bouton ou glisser-déposer), analyse récursive, rescan (⌘R)
-- Grille de miniatures rapide (taille réglable), tri par date de prise de vue ou par nom
-- Visionneuse : double-clic ou Entrée/Espace ; ← → pour naviguer, Échap pour fermer
-- Notes 0–5 étoiles (touches 0–5, inspecteur, menu contextuel), filtre « note minimale »
-- Étiquettes (plusieurs séparées par des virgules), multi-sélection ⌘/⇧-clic
-- Recherche : nom, dossier, étiquette, appareil, année (sans tenir compte des accents)
-- Inspecteur : EXIF (date, dimensions, appareil, objectif, réglages, GPS → Plans), légende, rotation
-- Grandes photothèques : listage immédiat, EXIF lus en arrière-plan, index persistant, cache disque des miniatures
+- **Dossiers** : ajout (⌘O, bouton, glisser-déposer), analyse récursive, rescan (⌘R)
+- **Grille** : miniatures rapides (taille réglable), **regroupement par dossier, par mois ou par année**
+  (en-têtes épinglés, « Tout sélectionner »), tri par date de prise de vue ou par nom
+- **Vidéos** (MOV, MP4, M4V, 3GP… ; AVI/WMV listés et ouverts dans l'application par défaut) :
+  miniature, lecture dans la visionneuse, date et lieu lus dans les métadonnées
+- **Visionneuse** : double-clic ou Entrée/Espace ; ← → ; F affiche les cadres des visages ; Échap
+- **Notes** 0–5 étoiles (touches 0–5), **étiquettes**, **légendes**, **rotation** d'affichage
+- **Albums virtuels** : une photo dans plusieurs albums sans copie ; créer (+), glisser des photos
+  sur un album, clic droit › Ajouter à l'album, renommer, supprimer (les photos restent)
+- **Personnes / visages** : détection et reconnaissance avec Vision (sur le Mac, rien n'est envoyé).
+  Les visages déjà nommés servent d'exemples ; les nouveaux visages reçoivent un nom *proposé*
+  à confirmer dans « Visages à nommer » ou dans l'inspecteur
+- **Carte** : photos géolocalisées regroupées selon le zoom ; clic : bande de photos, double-clic : visionneuse
+- **Doublons** : copies identiques (même taille + empreinte, puis comparaison octet par octet avant
+  suppression) ; la copie la plus annotée est gardée, les autres vont **à la corbeille** (récupérables)
+  et leurs notes, personnes et albums sont reportés
+- **Recherche** : nom, dossier, personne, album, étiquette, légende, appareil, année (sans accents)
+- **Inspecteur** : EXIF (date, dimensions, appareil, objectif, réglages, GPS → Plans), visages, personnes, albums
+- **Grandes photothèques** : listage immédiat, métadonnées lues en arrière-plan, index persistant,
+  cache disque des miniatures, lecture du disque limitée pour garder la grille fluide
 
 ## Import Picasa
 
@@ -36,12 +48,13 @@ Lit les `.picasa.ini` / `Picasa.ini` de chaque dossier et reprend, sans modifier
 | `caption=` | légende |
 
 L'import ne fait qu'ajouter : il peut être relancé sans risque. Non repris pour l'instant :
-retouches (`filters=`), dossiers cachés `Originals` (copies avant retouche), données des vidéos.
+retouches (`filters=`) et dossiers cachés `Originals` (copies avant retouche).
 
 ## Données
 
 - `~/Library/Application Support/Albumine/library.json` : dossiers suivis, notes, étiquettes, personnes, albums…
 - `~/Library/Application Support/Albumine/index.json` : index des fichiers et EXIF
+- `~/Library/Application Support/Albumine/faceprints.dat` : empreintes des visages d'exemple
 - `~/Library/Caches/Albumine/Miniatures` : miniatures (peut être supprimé)
 
 Variables utiles au développement : `ALBUMINE_HOME` (autre dossier de données), `ALBUMINE_DEBUG` (journal sur stderr),

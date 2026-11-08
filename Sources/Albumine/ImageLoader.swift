@@ -69,47 +69,18 @@ enum ImageLoader {
         let useDiskCache = maxPixel == thumbnailPixels
         let image = await Task.detached(priority: .userInitiated) { () -> NSImage? in
             let cacheFile = useDiskCache ? diskCacheURL(for: url) : nil
-            if let cacheFile, let cg = readImage(cacheFile) { return nsImage(rotate(cg, rotation)) }
-            guard let cg = decode(url, maxPixel: maxPixel) else {
+            if let cacheFile, let cg = readImage(cacheFile) { return nsImage(ImageDecoding.rotate(cg, rotation)) }
+            guard let cg = ImageDecoding.decode(url, maxPixel: maxPixel) else {
                 Debug.log("échec du décodage : \(url.path)")
                 return nil
             }
             // Le cache disque garde l'image non pivotée : changer la rotation ne relit pas l'original.
             if let cacheFile { writeJPEG(cg, to: cacheFile) }
-            return nsImage(rotate(cg, rotation))
+            return nsImage(ImageDecoding.rotate(cg, rotation))
         }.value
         if !urgent { await limiter.release() }
         if let image { memory.setObject(image, forKey: key(url, maxPixel, rotation)) }
         return image
-    }
-
-    private static func decode(_ url: URL, maxPixel: Int) -> CGImage? {
-        guard let source = CGImageSourceCreateWithURL(url as CFURL, [kCGImageSourceShouldCache: false] as CFDictionary)
-        else { return nil }
-        let options: [CFString: Any] = [
-            kCGImageSourceCreateThumbnailFromImageAlways: true,
-            kCGImageSourceCreateThumbnailWithTransform: true, // respecte l'orientation EXIF
-            kCGImageSourceThumbnailMaxPixelSize: maxPixel,
-            kCGImageSourceShouldCacheImmediately: true,
-        ]
-        return CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary)
-    }
-
-    /// Pivote de `quarterTurns` quarts de tour dans le sens horaire.
-    static func rotate(_ image: CGImage, _ quarterTurns: Int) -> CGImage {
-        let q = ((quarterTurns % 4) + 4) % 4
-        guard q != 0 else { return image }
-        let w = image.width, h = image.height
-        let (newW, newH) = q % 2 == 1 ? (h, w) : (w, h)
-        guard let ctx = CGContext(
-            data: nil, width: newW, height: newH, bitsPerComponent: 8, bytesPerRow: 0,
-            space: image.colorSpace ?? CGColorSpace(name: CGColorSpace.sRGB)!,
-            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
-        ) else { return image }
-        ctx.translateBy(x: CGFloat(newW) / 2, y: CGFloat(newH) / 2)
-        ctx.rotate(by: -CGFloat(q) * .pi / 2) // angle négatif = sens horaire (repère CoreGraphics)
-        ctx.draw(image, in: CGRect(x: -CGFloat(w) / 2, y: -CGFloat(h) / 2, width: CGFloat(w), height: CGFloat(h)))
-        return ctx.makeImage() ?? image
     }
 
     private static func nsImage(_ cg: CGImage) -> NSImage {
@@ -153,7 +124,9 @@ struct ThumbnailView: View {
                     .resizable()
                     .scaledToFit()
             } else if failed {
-                Image(systemName: "exclamationmark.triangle")
+                Image(systemName: PhotoScanner.videoExtensions.contains(url.pathExtension.lowercased())
+                      ? "film" : "exclamationmark.triangle")
+                    .font(.title)
                     .foregroundStyle(.secondary)
             } else {
                 RoundedRectangle(cornerRadius: 4).fill(.quaternary)
