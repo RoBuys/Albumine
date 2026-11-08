@@ -7,6 +7,7 @@ struct InspectorView: View {
     let photos: [Photo]
 
     @Etat private var newTag = ""
+    @Etat private var captionDraft = ""
     @Etat private var info: PhotoInfo?
 
     var body: some View {
@@ -18,6 +19,9 @@ struct InspectorView: View {
                 VStack(alignment: .leading, spacing: 18) {
                     header
                     ratingSection
+                    if photos.count == 1 { captionSection(photos[0]) }
+                    peopleSection
+                    albumsSection
                     tagsSection
                     if photos.count == 1 { infoSection(photos[0]) }
                     Button {
@@ -37,13 +41,23 @@ struct InspectorView: View {
     @ViewBuilder
     private var header: some View {
         if photos.count == 1, let photo = photos.first {
-            ThumbnailView(url: photo.url)
+            ThumbnailView(url: photo.url, rotation: library.rotation(of: photo))
                 .frame(maxWidth: .infinity, minHeight: 120, maxHeight: 220)
             Text(photo.name).font(.headline).textSelection(.enabled)
         } else {
             Label("\(photos.count) photos sélectionnées", systemImage: "square.stack")
                 .font(.headline)
         }
+        HStack {
+            Button { library.rotate(photos, by: -1) } label: {
+                Label("Pivoter à gauche", systemImage: "rotate.left")
+            }
+            Button { library.rotate(photos, by: 1) } label: {
+                Label("Pivoter à droite", systemImage: "rotate.right")
+            }
+        }
+        .labelStyle(.iconOnly)
+        .help("Pivoter l'affichage (le fichier n'est pas modifié)")
     }
 
     private var ratingSection: some View {
@@ -52,6 +66,48 @@ struct InspectorView: View {
             sectionTitle(photos.count > 1 && ratings.count > 1 ? "Note (différente selon les photos)" : "Note")
             StarRatingPicker(rating: ratings.count == 1 ? ratings.first! : 0, size: 18) { n in
                 library.setRating(n, for: photos)
+            }
+        }
+    }
+
+    private func captionSection(_ photo: Photo) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            sectionTitle("Légende")
+            TextField("Ajouter une légende", text: $captionDraft, axis: .vertical)
+                .textFieldStyle(.roundedBorder)
+                .lineLimit(1...4)
+                .onSubmit { library.setCaption(captionDraft, for: photo) }
+        }
+        .onChange(of: photo.id, initial: true) { captionDraft = library.caption(of: photo) }
+    }
+
+    @ViewBuilder
+    private var peopleSection: some View {
+        let union = photos.reduce(into: [String]()) { result, p in
+            for name in library.people(of: p) where !result.contains(name) { result.append(name) }
+        }.sorted { $0.localizedStandardCompare($1) == .orderedAscending }
+        if !union.isEmpty {
+            VStack(alignment: .leading, spacing: 8) {
+                sectionTitle("Personnes")
+                FlowLayout {
+                    ForEach(union, id: \.self) { name in
+                        TagChip(name: name, systemImage: "person.fill") {
+                            library.removePerson(name, from: photos)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var albumsSection: some View {
+        let union = Set(photos.flatMap { library.albums(of: $0) })
+            .sorted { $0.localizedStandardCompare($1) == .orderedAscending }
+        if !union.isEmpty {
+            VStack(alignment: .leading, spacing: 6) {
+                sectionTitle("Albums")
+                ForEach(union, id: \.self) { Label($0, systemImage: "rectangle.stack").font(.callout) }
             }
         }
     }

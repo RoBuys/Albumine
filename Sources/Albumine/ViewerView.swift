@@ -41,6 +41,14 @@ struct ViewerView: View {
                         Text((library.photo(id: photo.id)?.date ?? photo.date).formatted(date: .long, time: .shortened))
                             .font(.caption)
                             .foregroundStyle(.white.opacity(0.6))
+                        if !library.caption(of: photo).isEmpty {
+                            Text(library.caption(of: photo)).font(.callout).italic()
+                        }
+                        if !library.people(of: photo).isEmpty {
+                            Label(library.people(of: photo).joined(separator: ", "), systemImage: "person.2")
+                                .font(.caption)
+                                .foregroundStyle(.white.opacity(0.75))
+                        }
                     }
                     Spacer()
                     Text("\(index + 1) / \(photos.count)")
@@ -77,12 +85,13 @@ struct ViewerView: View {
             library.setRating(n, for: [photo])
             return .handled
         }
-        .task(id: photo.id) {
+        .task(id: "\(library.rotation(of: photo))|\(photo.id)") {
             let url = photo.url
+            let rotation = library.rotation(of: photo)
             // Affiche d'abord la miniature en cache, puis l'image haute définition.
-            image = ImageLoader.cached(url, maxPixel: ImageLoader.viewerPixels)
-                ?? ImageLoader.cached(url, maxPixel: ImageLoader.thumbnailPixels)
-            let full = await ImageLoader.load(url, maxPixel: ImageLoader.viewerPixels, urgent: true)
+            image = ImageLoader.cached(url, maxPixel: ImageLoader.viewerPixels, rotation: rotation)
+                ?? ImageLoader.cached(url, maxPixel: ImageLoader.thumbnailPixels, rotation: rotation)
+            let full = await ImageLoader.load(url, maxPixel: ImageLoader.viewerPixels, rotation: rotation, urgent: true)
             guard !Task.isCancelled else { return }
             if let full { image = full }
             preloadNeighbours()
@@ -98,7 +107,8 @@ struct ViewerView: View {
     private func preloadNeighbours() {
         for i in [index + 1, index - 1] where photos.indices.contains(i) {
             let url = photos[i].url
-            Task { _ = await ImageLoader.load(url, maxPixel: ImageLoader.viewerPixels, urgent: true) }
+            let rotation = library.rotation(of: photos[i])
+            Task { _ = await ImageLoader.load(url, maxPixel: ImageLoader.viewerPixels, rotation: rotation, urgent: true) }
         }
     }
 

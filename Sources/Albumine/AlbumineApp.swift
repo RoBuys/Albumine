@@ -28,6 +28,9 @@ struct AlbumineApp: App {
                     .keyboardShortcut("o")
                 Button("Rescanner les dossiers") { library.rescan() }
                     .keyboardShortcut("r")
+                Divider()
+                Button("Importer depuis Picasa…") { library.importPicasa() }
+                    .disabled(library.isImportingPicasa)
             }
         }
     }

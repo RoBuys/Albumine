@@ -17,6 +17,26 @@ struct SidebarView: View {
                     .tag(SidebarItem.starred)
             }
 
+            if !library.allPeople.isEmpty {
+                Section("Personnes") {
+                    ForEach(library.allPeople, id: \.name) { person in
+                        Label(person.name, systemImage: "person.crop.circle")
+                            .badge(person.count)
+                            .tag(SidebarItem.person(person.name))
+                    }
+                }
+            }
+
+            if !library.allAlbums.isEmpty {
+                Section("Albums") {
+                    ForEach(library.allAlbums, id: \.name) { album in
+                        Label(album.name, systemImage: "rectangle.stack")
+                            .badge(album.count)
+                            .tag(SidebarItem.album(album.name))
+                    }
+                }
+            }
+
             if !tags.isEmpty {
                 Section("Étiquettes") {
                     ForEach(tags, id: \.name) { tag in
@@ -58,7 +78,10 @@ struct SidebarView: View {
                 }
                 .buttonStyle(.borderless)
                 Spacer()
-                if library.isScanning {
+                if library.isImportingPicasa {
+                    ProgressView().controlSize(.small)
+                    Text("Import Picasa…").font(.caption).foregroundStyle(.secondary)
+                } else if library.isScanning {
                     ProgressView().controlSize(.small)
                     Text("Analyse…").font(.caption).foregroundStyle(.secondary)
                 } else if library.isReadingExif {

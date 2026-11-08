@@ -45,15 +45,19 @@ enum ImageLoader {
         return c
     }()
 
-    private static func key(_ url: URL, _ maxPixel: Int) -> NSString { "\(maxPixel)|\(url.path)" as NSString }
-
-    static func cached(_ url: URL, maxPixel: Int) -> NSImage? {
-        memory.object(forKey: key(url, maxPixel))
+    private static func key(_ url: URL, _ maxPixel: Int, _ rotation: Int) -> NSString {
+        "\(maxPixel)|\(rotation)|\(url.path)" as NSString
     }
 
-    /// - Parameter urgent: ignore la file d'attente (visionneuse).
-    static func load(_ url: URL, maxPixel: Int, urgent: Bool = false) async -> NSImage? {
-        if let hit = cached(url, maxPixel: maxPixel) { return hit }
+    static func cached(_ url: URL, maxPixel: Int, rotation: Int = 0) -> NSImage? {
+        memory.object(forKey: key(url, maxPixel, rotation))
+    }
+
+    /// - Parameters:
+    ///   - rotation: quarts de tour horaires appliqués à l'affichage (rotations Picasa / utilisateur).
+    ///   - urgent: ignore la file d'attente (visionneuse).
+    static func load(_ url: URL, maxPixel: Int, rotation: Int = 0, urgent: Bool = false) async -> NSImage? {
+        if let hit = cached(url, maxPixel: maxPixel, rotation: rotation) { return hit }
         if !urgent {
             await limiter.acquire()
             // La cellule a pu disparaître de l'écran pendant l'attente.
@@ -65,16 +69,17 @@ enum ImageLoader {
         let useDiskCache = maxPixel == thumbnailPixels
         let image = await Task.detached(priority: .userInitiated) { () -> NSImage? in
             let cacheFile = useDiskCache ? diskCacheURL(for: url) : nil
-            if let cacheFile, let cg = readImage(cacheFile) { return nsImage(cg) }
+            if let cacheFile, let cg = readImage(cacheFile) { return nsImage(rotate(cg, rotation)) }
             guard let cg = decode(url, maxPixel: maxPixel) else {
                 Debug.log("échec du décodage : \(url.path)")
                 return nil
             }
+            // Le cache disque garde l'image non pivotée : changer la rotation ne relit pas l'original.
             if let cacheFile { writeJPEG(cg, to: cacheFile) }
-            return nsImage(cg)
+            return nsImage(rotate(cg, rotation))
         }.value
         if !urgent { await limiter.release() }
-        if let image { memory.setObject(image, forKey: key(url, maxPixel)) }
+        if let image { memory.setObject(image, forKey: key(url, maxPixel, rotation)) }
         return image
     }
 
@@ -88,6 +93,23 @@ enum ImageLoader {
             kCGImageSourceShouldCacheImmediately: true,
         ]
         return CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary)
+    }
+
+    /// Pivote de `quarterTurns` quarts de tour dans le sens horaire.
+    static func rotate(_ image: CGImage, _ quarterTurns: Int) -> CGImage {
+        let q = ((quarterTurns % 4) + 4) % 4
+        guard q != 0 else { return image }
+        let w = image.width, h = image.height
+        let (newW, newH) = q % 2 == 1 ? (h, w) : (w, h)
+        guard let ctx = CGContext(
+            data: nil, width: newW, height: newH, bitsPerComponent: 8, bytesPerRow: 0,
+            space: image.colorSpace ?? CGColorSpace(name: CGColorSpace.sRGB)!,
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        ) else { return image }
+        ctx.translateBy(x: CGFloat(newW) / 2, y: CGFloat(newH) / 2)
+        ctx.rotate(by: -CGFloat(q) * .pi / 2) // angle négatif = sens horaire (repère CoreGraphics)
+        ctx.draw(image, in: CGRect(x: -CGFloat(w) / 2, y: -CGFloat(h) / 2, width: CGFloat(w), height: CGFloat(h)))
+        return ctx.makeImage() ?? image
     }
 
     private static func nsImage(_ cg: CGImage) -> NSImage {
@@ -119,6 +141,7 @@ enum ImageLoader {
 
 struct ThumbnailView: View {
     let url: URL
+    var rotation: Int = 0
     var maxPixel: Int = ImageLoader.thumbnailPixels
     @Etat private var image: NSImage?
     @Etat private var failed = false
@@ -136,14 +159,14 @@ struct ThumbnailView: View {
                 RoundedRectangle(cornerRadius: 4).fill(.quaternary)
             }
         }
-        .task(id: url) {
-            if let hit = ImageLoader.cached(url, maxPixel: maxPixel) {
+        .task(id: "\(rotation)|\(url.path)") {
+            if let hit = ImageLoader.cached(url, maxPixel: maxPixel, rotation: rotation) {
                 image = hit
                 return
             }
             image = nil
             failed = false
-            let loaded = await ImageLoader.load(url, maxPixel: maxPixel)
+            let loaded = await ImageLoader.load(url, maxPixel: maxPixel, rotation: rotation)
             guard !Task.isCancelled else { return }
             image = loaded
             failed = loaded == nil

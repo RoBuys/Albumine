@@ -43,10 +43,12 @@ struct StarBadge: View {
 /// Étiquette avec bouton de suppression.
 struct TagChip: View {
     let name: String
+    var systemImage: String?
     let onRemove: () -> Void
 
     var body: some View {
         HStack(spacing: 4) {
+            if let systemImage { Image(systemName: systemImage).imageScale(.small) }
             Text(name)
             Button(action: onRemove) {
                 Image(systemName: "xmark.circle.fill")

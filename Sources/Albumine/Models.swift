@@ -21,11 +21,57 @@ struct Photo: Identifiable, Hashable {
     var date: Date { captureDate ?? modificationDate }
 }
 
-/// Données ajoutées par l'utilisateur, stockées à part (non destructif).
+/// Données ajoutées par l'utilisateur (ou importées de Picasa), stockées à part : non destructif.
 struct PhotoMetadata: Codable, Equatable {
-    var rating: Int = 0
+    var rating = 0
     var tags: [String] = []
-    var isEmpty: Bool { rating == 0 && tags.isEmpty }
+    var people: [String] = []
+    var albums: [String] = []
+    var caption = ""
+    /// Rotation d'affichage, en quarts de tour dans le sens horaire (0–3).
+    var rotation = 0
+    /// Zones des visages (coordonnées relatives 0–1), reprises de Picasa.
+    var faces: [FaceRegion] = []
+
+    init() {}
+
+    var isEmpty: Bool {
+        rating == 0 && tags.isEmpty && people.isEmpty && albums.isEmpty
+            && caption.isEmpty && rotation == 0 && faces.isEmpty
+    }
+
+    private enum CodingKeys: String, CodingKey { case rating, tags, people, albums, caption, rotation, faces }
+
+    // Champs facultatifs : les anciens fichiers restent lisibles, les champs vides ne sont pas écrits.
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        rating = try c.decodeIfPresent(Int.self, forKey: .rating) ?? 0
+        tags = try c.decodeIfPresent([String].self, forKey: .tags) ?? []
+        people = try c.decodeIfPresent([String].self, forKey: .people) ?? []
+        albums = try c.decodeIfPresent([String].self, forKey: .albums) ?? []
+        caption = try c.decodeIfPresent(String.self, forKey: .caption) ?? ""
+        rotation = try c.decodeIfPresent(Int.self, forKey: .rotation) ?? 0
+        faces = try c.decodeIfPresent([FaceRegion].self, forKey: .faces) ?? []
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        if rating != 0 { try c.encode(rating, forKey: .rating) }
+        if !tags.isEmpty { try c.encode(tags, forKey: .tags) }
+        if !people.isEmpty { try c.encode(people, forKey: .people) }
+        if !albums.isEmpty { try c.encode(albums, forKey: .albums) }
+        if !caption.isEmpty { try c.encode(caption, forKey: .caption) }
+        if rotation != 0 { try c.encode(rotation, forKey: .rotation) }
+        if !faces.isEmpty { try c.encode(faces, forKey: .faces) }
+    }
+}
+
+struct FaceRegion: Codable, Equatable {
+    var name: String?
+    var x: Double
+    var y: Double
+    var w: Double
+    var h: Double
 }
 
 struct FolderSummary: Identifiable, Hashable {
@@ -41,6 +87,8 @@ enum SidebarItem: Hashable {
     case starred
     case folder(String)
     case tag(String)
+    case person(String)
+    case album(String)
 }
 
 enum PhotoSort: String, CaseIterable, Identifiable {

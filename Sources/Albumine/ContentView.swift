@@ -64,6 +64,15 @@ struct ContentView: View {
             }
         }
         .animation(.easeInOut(duration: 0.15), value: viewerIndex == nil)
+        .alert(
+            "Import Picasa terminé",
+            isPresented: Binding(get: { library.picasaSummary != nil },
+                                 set: { if !$0 { library.picasaSummary = nil } })
+        ) {
+            Button("OK") { library.picasaSummary = nil }
+        } message: {
+            Text(library.picasaSummary?.message ?? "")
+        }
         .task(id: filterKey) {
             // Petite temporisation pendant la frappe dans la recherche.
             if !search.isEmpty { try? await Task.sleep(for: .milliseconds(200)) }
@@ -99,6 +108,34 @@ struct ContentView: View {
             }
         } else {
             grid(photos)
+                .safeAreaInset(edge: .top) { picasaBanner }
+        }
+    }
+
+    @ViewBuilder
+    private var picasaBanner: some View {
+        if library.picasaFilesFound > 0, !library.picasaImported {
+            HStack(spacing: 12) {
+                Image(systemName: "square.and.arrow.down.on.square")
+                    .font(.title2)
+                    .foregroundStyle(Color.accentColor)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Données Picasa trouvées dans \(library.picasaFilesFound) dossiers")
+                        .font(.headline)
+                    Text("Personnes, albums, étoiles, rotations et légendes peuvent être repris. Vos fichiers ne sont pas modifiés.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+                Button("Plus tard") { library.dismissPicasaBanner() }
+                Button("Importer") { library.importPicasa() }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(library.isImportingPicasa)
+            }
+            .padding(12)
+            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 10))
+            .padding(.horizontal, 14)
+            .padding(.top, 8)
         }
     }
 
@@ -114,7 +151,8 @@ struct ContentView: View {
                             photo: photo,
                             size: thumbSize,
                             isSelected: selection.contains(photo.id),
-                            rating: library.rating(of: photo)
+                            rating: library.rating(of: photo),
+                            rotation: library.rotation(of: photo)
                         )
                         .id(photo.id)
                         .gesture(TapGesture(count: 2).onEnded { viewerIndex = index })
@@ -148,6 +186,9 @@ struct ContentView: View {
         Button("Ouvrir avec l'application par défaut") {
             targets.forEach { NSWorkspace.shared.open($0.url) }
         }
+        Divider()
+        Button("Pivoter à droite") { library.rotate(targets, by: 1) }
+        Button("Pivoter à gauche") { library.rotate(targets, by: -1) }
         Divider()
         Menu("Note") {
             ForEach(0...5, id: \.self) { n in
@@ -212,6 +253,8 @@ struct ContentView: View {
         case .starred: list = list.filter { library.rating(of: $0) > 0 }
         case .folder(let path): list = list.filter { $0.folderPath == path }
         case .tag(let tag): list = list.filter { library.tags(of: $0).contains(tag) }
+        case .person(let name): list = list.filter { library.people(of: $0).contains(name) }
+        case .album(let name): list = list.filter { library.albums(of: $0).contains(name) }
         }
         if minRating > 0 {
             list = list.filter { library.rating(of: $0) >= minRating }
@@ -234,6 +277,8 @@ struct ContentView: View {
         case .starred: return "Étoilées"
         case .folder(let path): return (path as NSString).lastPathComponent
         case .tag(let tag): return tag
+        case .person(let name): return name
+        case .album(let name): return name
         }
     }
 
@@ -296,10 +341,11 @@ struct PhotoCell: View {
     let size: Double
     let isSelected: Bool
     let rating: Int
+    let rotation: Int
 
     var body: some View {
         VStack(spacing: 4) {
-            ThumbnailView(url: photo.url)
+            ThumbnailView(url: photo.url, rotation: rotation)
                 .frame(width: size, height: size)
                 .overlay(alignment: .bottomLeading) {
                     if rating > 0 { StarBadge(rating: rating).padding(4) }
