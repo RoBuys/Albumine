@@ -297,6 +297,7 @@ final class PhotoLibrary {
             setPhotos(result.photos)
             isScanning = false
             if ProcessInfo.processInfo.environment["ALBUMINE_AUTOIMPORT"] != nil { importPicasa() } // tests
+            if ProcessInfo.processInfo.environment["ALBUMINE_AUTODUPLICATES"] != nil { findDuplicates() } // tests
             if result.pending.isEmpty {
                 saveIndex()
                 afterExifPass()
@@ -687,28 +688,61 @@ final class PhotoLibrary {
 
     func findDuplicates() {
         guard !isFindingDuplicates else { return }
-        let candidates = DuplicateFinder.sameSizeCandidates(photos.filter { !$0.offline })
-        let items = candidates.map { (id: $0.id, url: $0.url, size: $0.fileSize) }
-        let generation = scanGeneration
+        // Sorted by path: files of a folder are read together (far fewer seeks on a hard drive).
+        let items = DuplicateFinder.sameSizeCandidates(photos.filter { !$0.offline })
+            .map { (id: $0.id, url: $0.url, size: $0.fileSize, mtime: $0.modificationDate) }
+            .sorted { $0.id < $1.id }
         isFindingDuplicates = true
         duplicateDone = 0
         duplicateTotal = items.count
+        Debug.log("doublons : \(items.count) fichiers de même taille")
         Task {
+            var cache = await Task.detached(priority: .utility) { DuplicateHashCache.load() }.value
             var byHash: [String: [String]] = [:]
-            var start = 0
-            while start < items.count {
-                await ImageLoader.waitUntilIdle(maxSeconds: 15)
-                guard generation == scanGeneration else { isFindingDuplicates = false; return }
-                let end = min(start + 64, items.count)
-                let batch = Array(items[start..<end])
-                let results = await Task.detached(priority: .utility) { DuplicateFinder.hashes(batch) }.value
-                for r in results { if let h = r.hash { byHash[h, default: []].append(r.id) } }
-                start = end
-                duplicateDone = end
+            var toRead: [(id: String, url: URL, size: Int64, mtime: Date)] = []
+            for it in items {
+                if let h = cache.hash(path: it.id, size: it.size, mtime: it.mtime) {
+                    byHash[h, default: []].append(it.id)
+                } else {
+                    toRead.append(it)
+                }
             }
-            setDuplicateGroups(byHash.values.filter { $0.count > 1 }.map { $0.sorted(by: keeperFirst) })
+            duplicateDone = items.count - toRead.count
+            var sinceSave = 0
+            var start = 0
+            // A rescan (folder watching) no longer interrupts the search: ids are paths, and
+            // photos that disappeared in the meantime are dropped from the result below.
+            while start < toRead.count {
+                // Brief pause only, so the grid stays smooth (a long wait made the search
+                // crawl while the content analysis kept the image loader busy).
+                await ImageLoader.waitUntilIdle(maxSeconds: 0.5)
+                let end = min(start + 128, toRead.count)
+                let batch = Array(toRead[start..<end])
+                let hashes = await Watchdog.map(batch, width: 4, timeout: 30) { DuplicateFinder.quickHash($0.url, size: $0.size) }
+                for (it, h) in zip(batch, hashes) {
+                    guard let h = h ?? nil else { continue }
+                    byHash[h, default: []].append(it.id)
+                    cache.entries[it.id] = .init(s: it.size, m: it.mtime.timeIntervalSince1970, h: h)
+                }
+                sinceSave += batch.count
+                if sinceSave >= 4000 {
+                    sinceSave = 0
+                    let snapshot = cache
+                    Task.detached(priority: .utility) { snapshot.save() }
+                }
+                start = end
+                duplicateDone = items.count - toRead.count + end
+            }
+            let snapshot = cache
+            Task.detached(priority: .utility) { snapshot.save() }
+            let present = Set(photos.map(\.id))
+            setDuplicateGroups(byHash.values
+                .map { $0.filter(present.contains) }
+                .filter { $0.count > 1 }
+                .map { $0.sorted(by: keeperFirst) })
             isFindingDuplicates = false
             let waste = duplicateWaste
+            Debug.log("doublons : \(duplicateGroups?.count ?? 0) groupes, \(waste.count) copies")
             notice = waste.count == 0
                 ? "Aucun doublon trouvé."
                 : "\(duplicateGroups?.count ?? 0) groupes de doublons : \(waste.count) copies en trop (\(ByteCountFormatter.string(fromByteCount: waste.bytes, countStyle: .file)))."

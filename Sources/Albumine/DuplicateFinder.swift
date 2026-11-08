@@ -26,17 +26,31 @@ enum DuplicateFinder {
             .values.filter { $0.count > 1 }.flatMap { $0 }
     }
 
-    static func hashes(_ items: [(id: String, url: URL, size: Int64)]) -> [(id: String, hash: String?)] {
-        var out = [(id: String, hash: String?)](repeating: ("", nil), count: items.count)
-        out.withUnsafeMutableBufferPointer { buffer in
-            DispatchQueue.concurrentPerform(iterations: items.count) { i in
-                buffer[i] = (items[i].id, quickHash(items[i].url, size: items[i].size))
-            }
-        }
-        return out
-    }
-
     static func identical(_ a: URL, _ b: URL) -> Bool {
         FileManager.default.contentsEqual(atPath: a.path, andPath: b.path)
+    }
+}
+
+/// Fingerprints already computed, keyed by path and valid while size and modification date are
+/// unchanged: a new search only reads files that are new or modified (essential on a large drive).
+struct DuplicateHashCache: Codable {
+    struct Entry: Codable { let s: Int64; let m: Double; let h: String }
+    var entries: [String: Entry] = [:]
+
+    static var url: URL { AppPaths.support.appendingPathComponent("duplicate-hashes.json") }
+
+    static func load() -> DuplicateHashCache {
+        guard let data = try? Data(contentsOf: url),
+              let cache = try? JSONDecoder().decode(DuplicateHashCache.self, from: data) else { return DuplicateHashCache() }
+        return cache
+    }
+
+    func save() {
+        if let data = try? JSONEncoder().encode(self) { try? data.write(to: Self.url, options: .atomic) }
+    }
+
+    func hash(path: String, size: Int64, mtime: Date) -> String? {
+        guard let e = entries[path], e.s == size, abs(e.m - mtime.timeIntervalSince1970) < 1 else { return nil }
+        return e.h
     }
 }

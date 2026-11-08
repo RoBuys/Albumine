@@ -90,7 +90,7 @@ without it, installed copies cannot be updated automatically anymore.
   (free, square, 4:3, 3:2, 16:9…); applied to display, slideshow and export
 - **Batch date correction** (right-click › "Corriger la date…"): shift dates (wrong camera clock) or set
   an exact date (scanned photos), with preview; original dates can be restored
-- **Exact duplicates**: same size + fingerprint, then byte-by-byte comparison before removal; the most
+- **Exact duplicates**: same size + fingerprint (remembered: after the first search, only new files are read), then byte-by-byte comparison before removal; the most
   annotated copy is kept, the others go **to the Trash** (recoverable) and their ratings, people and
   albums are carried over
 - **Similar photos**: bursts and resized versions (perceptual hash + time proximity);
@@ -139,10 +139,11 @@ raw image orientation (before EXIF rotation); Albumine converts them. Hidden `Or
 - `~/Library/Application Support/Albumine/analysis.json`: content analysis (categories, quality, text, fingerprints)
 - `~/Library/Application Support/Albumine/places.json`: place names
 - `~/Library/Application Support/Albumine/xmp-state.json`: last state written to each XMP sidecar
+- `~/Library/Application Support/Albumine/duplicate-hashes.json`: duplicate fingerprints (only new or modified files are read again)
 - `~/Library/Caches/Albumine/Miniatures`: thumbnails (safe to delete)
 
 Environment variables useful for development: `ALBUMINE_HOME` (alternate data folder),
-`ALBUMINE_DEBUG` (log to stderr), `ALBUMINE_AUTOIMPORT` (automatic Picasa import at launch),
+`ALBUMINE_DEBUG` (log to stderr), `ALBUMINE_AUTOIMPORT` (automatic Picasa import at launch), `ALBUMINE_AUTODUPLICATES` (duplicate search at launch),
 `ALBUMINE_START_VIEW=map` (open the map view at launch).
 
 ## Technical note
