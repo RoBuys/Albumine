@@ -1,13 +1,13 @@
 import Foundation
 
-/// Noms français des catégories reconnues par Vision (VNClassifyImageRequest).
-/// Les catégories absentes de cette table restent cherchables par leur nom anglais.
+/// French names of the categories recognized by Vision (VNClassifyImageRequest).
+/// Categories missing from this table remain searchable by their English name.
 enum ContentLabels {
     static func french(_ id: String) -> String {
         names[id] ?? id.replacingOccurrences(of: "_", with: " ")
     }
 
-    /// Texte normalisé dans lequel la recherche s'effectue (français + anglais + synonymes).
+    /// Normalized text searched against (French + English + synonyms).
     static func searchText(_ id: String) -> String {
         cache.withLock { cache in
             if let s = cache[id] { return s }
@@ -20,7 +20,7 @@ enum ContentLabels {
 
     private static let cache = Mutex<[String: String]>([:])
 
-    /// Catégories trop générales pour être utiles (ni affichées ni cherchées).
+    /// Categories too generic to be useful (neither shown nor searched).
     static let ignored: Set<String> = [
         "structure", "material", "land", "liquid", "conveyance", "consumer_electronics", "container",
         "housewares", "textile", "wood_processed", "raw_glass", "light", "daytime", "outdoor", "art",
@@ -41,7 +41,7 @@ enum ContentLabels {
     ]
 
     static let names: [String: String] = [
-        // Personnes et événements
+        // People and events
         "people": "personnes", "adult": "adulte", "baby": "bébé", "child": "enfant", "teen": "adolescent",
         "crowd": "foule", "bride": "mariée", "groom": "marié", "bridesmaid": "demoiselle d'honneur",
         "wedding": "mariage", "wedding_cake": "gâteau de mariage", "wedding_dress": "robe de mariée",
@@ -58,7 +58,7 @@ enum ContentLabels {
         "classroom": "salle de classe", "conference": "conférence", "ballet": "ballet", "ballet_dancer": "danseuse",
         "military_uniform": "uniforme militaire", "suit": "costume", "tuxedo": "smoking", "gown": "robe de soirée",
 
-        // Animaux
+        // Animals
         "animal": "animal", "dog": "chien", "cat": "chat", "puppy": "chiot", "kitten": "chaton",
         "adult_cat": "chat", "canine": "chien", "feline": "félin", "horse": "cheval", "pony": "poney",
         "donkey": "âne", "cow": "vache", "pig": "cochon", "sheep": "mouton", "goat": "chèvre",
@@ -79,7 +79,7 @@ enum ContentLabels {
         "poodle": "caniche", "bulldog": "bouledogue", "dachshund": "teckel", "chihuahua": "chihuahua",
         "beagle": "beagle", "terrier": "terrier", "spaniel": "épagneul", "husky": "husky",
 
-        // Nature et paysages
+        // Nature and landscapes
         "beach": "plage", "ocean": "océan", "sea": "mer", "shore": "rivage", "sand": "sable",
         "sand_dune": "dune", "island": "île", "coral_reef": "récif de corail", "underwater": "sous l'eau",
         "water": "eau", "water_body": "plan d'eau", "lake": "lac", "river": "rivière", "creek": "ruisseau",
@@ -101,7 +101,7 @@ enum ContentLabels {
         "ice": "glace", "frozen": "gel", "fire": "feu", "flame": "flamme", "embers": "braises",
         "celestial_body": "astre", "wood_natural": "bois", "branch": "branche", "nest": "nid",
 
-        // Lieux et bâtiments
+        // Places and buildings
         "cityscape": "ville", "street": "rue", "alley": "ruelle", "road": "route", "dirt_road": "chemin",
         "path": "sentier", "trail": "sentier", "sidewalk": "trottoir", "crosswalk": "passage piéton",
         "bridge": "pont", "tunnel": "tunnel", "building": "bâtiment", "skyscraper": "gratte-ciel",
@@ -121,7 +121,7 @@ enum ContentLabels {
         "pool": "piscine", "jacuzzi": "jacuzzi", "garage": "garage", "fence": "clôture", "gazebo": "kiosque",
         "arch": "arche", "dome": "dôme", "stained_glass": "vitrail", "graffiti": "graffiti",
 
-        // Intérieur et objets
+        // Indoors and objects
         "interior_room": "intérieur", "living_room": "salon", "bedroom": "chambre", "kitchen": "cuisine",
         "kitchen_room": "cuisine", "dining_room": "salle à manger", "bathroom": "salle de bain",
         "bathroom_room": "salle de bain", "office_supplies": "fournitures de bureau", "desk": "bureau",
@@ -143,7 +143,7 @@ enum ContentLabels {
         "microphone": "micro", "board_game": "jeu de société", "chess": "échecs", "puzzles": "puzzle",
         "play_card": "cartes à jouer", "videogame": "jeu vidéo", "kite": "cerf-volant", "ball": "ballon",
 
-        // Nourriture et boissons
+        // Food and drinks
         "food": "nourriture", "meal": "repas", "dessert": "dessert", "cake": "gâteau", "cake_regular": "gâteau",
         "cupcake": "cupcake", "pie": "tarte", "pastry": "pâtisserie", "baked_goods": "viennoiseries",
         "bread": "pain", "croissant": "croissant", "cookie": "biscuit", "chocolate": "chocolat",
@@ -162,7 +162,7 @@ enum ContentLabels {
         "sparkling_wine": "champagne", "wine_bottle": "bouteille de vin", "cocktail": "cocktail",
         "picnic": "pique-nique",
 
-        // Sports et loisirs
+        // Sports and leisure
         "sport": "sport", "skiing": "ski", "ski_equipment": "matériel de ski", "snowboarding": "snowboard",
         "snowboard": "snowboard", "sledding": "luge", "sled": "luge", "snowman": "bonhomme de neige",
         "ice_skating": "patinage", "chairlift": "télésiège", "cableway": "téléphérique",
@@ -179,7 +179,7 @@ enum ContentLabels {
         "bowling": "bowling", "billiards": "billard", "ping_pong": "ping-pong", "paragliding": "parapente",
         "parachute": "parachute", "hangglider": "deltaplane", "motorsport": "sport automobile",
 
-        // Véhicules et transports
+        // Vehicles and transport
         "vehicle": "véhicule", "car": "voiture", "automobile": "voiture", "sportscar": "voiture de sport",
         "convertible": "cabriolet", "suv": "4x4", "jeep": "jeep", "van": "camionnette", "truck": "camion",
         "bus": "bus", "motorcycle": "moto", "tractor": "tracteur", "train": "train", "train_real": "train",
@@ -188,7 +188,7 @@ enum ContentLabels {
         "firetruck": "camion de pompiers", "police_car": "voiture de police", "ambulance": "ambulance",
         "railroad": "voie ferrée",
 
-        // Documents et captures
+        // Documents and screenshots
         "screenshot": "capture d'écran", "document": "document", "printed_page": "page imprimée",
         "handwriting": "écriture manuscrite", "receipt": "ticket de caisse", "diagram": "schéma",
         "chart": "graphique", "illustrations": "illustration", "whiteboard": "tableau blanc",
@@ -199,7 +199,7 @@ enum ContentLabels {
     ]
 }
 
-/// Petit verrou générique (cache partagé entre fils d'analyse).
+/// Small generic lock (cache shared between analysis threads).
 final class Mutex<Value>: @unchecked Sendable {
     private var value: Value
     private let lock = NSLock()

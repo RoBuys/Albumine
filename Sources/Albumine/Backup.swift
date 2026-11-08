@@ -2,7 +2,7 @@ import AVFoundation
 import Foundation
 import ImageIO
 
-/// Ce qu'il reste à copier pour que la sauvegarde soit à jour.
+/// What is left to copy for the backup to be up to date.
 struct BackupPlan {
     struct File {
         let source: URL
@@ -11,12 +11,12 @@ struct BackupPlan {
     }
     var files: [File]
     var totalBytes: Int64
-    /// Fichiers déjà présents et à jour dans la sauvegarde.
+    /// Files already present and up to date in the backup.
     var upToDate: Int
 }
 
-/// Sauvegarde incrémentale vers un dossier (idéalement sur un autre disque) :
-/// `destination/<nom du dossier suivi>/<chemin relatif>`. Rien n'est jamais supprimé de la sauvegarde.
+/// Incremental backup to a folder (ideally on another drive):
+/// `destination/<watched folder name>/<relative path>`. Nothing is ever deleted from the backup.
 enum BackupEngine {
     static func plan(_ sources: [(URL, Int64)], roots: [URL], destination: URL) -> BackupPlan {
         let fm = FileManager.default
@@ -29,10 +29,10 @@ enum BackupEngine {
             let dest = destination.appendingPathComponent(root.lastPathComponent).appendingPathComponent(relative)
             let size = knownSize >= 0 ? knownSize
                 : Int64((try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0)
-            // À jour : même taille et pas plus ancienne que l'original (la copie garde la date d'origine).
+            // Up to date: same size and not older than the original (the copy keeps the original date).
             if let attrs = try? fm.attributesOfItem(atPath: dest.path),
                (attrs[.size] as? NSNumber)?.int64Value == size {
-                // Lecture directe (les URL gardent en cache leurs anciennes valeurs).
+                // Read directly (URLs cache their old resource values).
                 let srcDate = (try? fm.attributesOfItem(atPath: url.path))?[.modificationDate] as? Date ?? .distantPast
                 let dstDate = attrs[.modificationDate] as? Date ?? .distantPast
                 if srcDate.timeIntervalSince(dstDate) < 2 {
@@ -46,7 +46,7 @@ enum BackupEngine {
         return BackupPlan(files: files, totalBytes: total, upToDate: upToDate)
     }
 
-    /// Copie un fichier (via un fichier temporaire : jamais de copie à moitié écrite).
+    /// Copies a file (through a temporary file: never a half-written copy).
     static func copy(_ f: BackupPlan.File) -> Bool {
         let fm = FileManager.default
         do {
@@ -66,7 +66,7 @@ enum BackupEngine {
         }
     }
 
-    /// Copie aussi les données d'Albumine (notes, personnes, albums, analyses) dans la sauvegarde.
+    /// Also copies Albumine's data (ratings, people, albums, analyses) into the backup.
     static func copyLibraryData(to destination: URL) {
         let fm = FileManager.default
         let target = destination.appendingPathComponent("Albumine (données)")
@@ -80,7 +80,7 @@ enum BackupEngine {
     }
 }
 
-/// Contrôle d'intégrité : fichier vide, illisible, JPEG tronqué, image ou vidéo indécodable.
+/// Integrity check: empty, unreadable or truncated JPEG, undecodable image or video.
 enum IntegrityChecker {
     static func problem(_ photo: Photo) -> String? {
         let url = photo.url
@@ -94,7 +94,7 @@ enum IntegrityChecker {
             try? handle.seek(toOffset: 0)
             let head = (try? handle.read(upToCount: 3)) ?? Data()
             if head != Data([0xFF, 0xD8, 0xFF]) { return "Pas un JPEG valide" }
-            // La fin d'un JPEG est marquée par FF D9 (des données peuvent suivre : on cherche dans la fin).
+            // A JPEG ends with FF D9 (data may follow it, so we search near the end).
             let tailSize = min(UInt64(65536), size)
             try? handle.seek(toOffset: size - tailSize)
             let tail = (try? handle.read(upToCount: Int(tailSize))) ?? Data()
@@ -108,7 +108,7 @@ enum IntegrityChecker {
         }
 
         if PhotoScanner.videoExtensions.contains(ext) {
-            // Seuls les formats lus par macOS sont vérifiables (pas AVI/WMV…).
+            // Only formats macOS can read are checkable (not AVI/WMV…).
             guard ["mov", "mp4", "m4v", "3gp"].contains(ext) else { return nil }
             return AVURLAsset(url: url).tracks.isEmpty ? "Vidéo illisible" : nil
         }

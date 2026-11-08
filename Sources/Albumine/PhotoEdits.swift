@@ -2,8 +2,8 @@ import CoreImage
 import CoreImage.CIFilterBuiltins
 import Foundation
 
-/// Retouches non destructives : enregistrées dans Albumine, appliquées à l'affichage et à l'export.
-/// Le fichier d'origine n'est jamais modifié.
+/// Non-destructive edits: stored in Albumine, applied to display and export.
+/// The original file is never modified.
 struct PhotoEdits: Codable, Equatable, Hashable {
     enum Filter: String, Codable, CaseIterable, Identifiable {
         case none = "Aucun"
@@ -15,16 +15,16 @@ struct PhotoEdits: Codable, Equatable, Hashable {
         var id: String { rawValue }
     }
 
-    var auto = false            // « J'ai de la chance » : corrections automatiques Core Image
-    var exposure = 0.0          // -2 … +2 IL
+    var auto = false            // "J'ai de la chance" (I'm feeling lucky): automatic Core Image corrections
+    var exposure = 0.0          // -2 … +2 EV
     var contrast = 0.0          // -1 … +1
     var saturation = 0.0        // -1 … +1
-    var warmth = 0.0            // -1 (froid) … +1 (chaud)
-    var highlights = 0.0        // -1 … +1 (récupère les hautes lumières)
-    var shadows = 0.0           // -1 … +1 (débouche les ombres)
-    var straighten = 0.0        // degrés, -15 … +15
+    var warmth = 0.0            // -1 (cool) … +1 (warm)
+    var highlights = 0.0        // -1 … +1 (recovers highlights)
+    var shadows = 0.0           // -1 … +1 (lifts shadows)
+    var straighten = 0.0        // degrees, -15 … +15
     var filter: Filter = .none
-    /// Recadrage relatif (0–1) dans l'image orientée et pivotée, origine en haut à gauche.
+    /// Relative crop (0–1) in the oriented and rotated image, origin at the top left.
     var cropX = 0.0, cropY = 0.0, cropW = 1.0, cropH = 1.0
 
     var crop: CGRect {
@@ -39,11 +39,11 @@ struct PhotoEdits: Codable, Equatable, Hashable {
             && shadows == 0 && straighten == 0 && filter == .none && !hasCrop
     }
 
-    /// Clé courte pour les caches de miniatures.
+    /// Short key for thumbnail caches.
     var cacheKey: String { isIdentity ? "" : String(hashValue, radix: 36) }
 }
 
-/// Applique les retouches avec Core Image (GPU).
+/// Applies the edits with Core Image (GPU).
 enum EditRenderer {
     private static let context = CIContext(options: [.cacheIntermediates: false])
 
@@ -96,12 +96,12 @@ enum EditRenderer {
         ci = ci.cropped(to: extent)
 
         if e.straighten != 0 {
-            // CIStraightenFilter tourne et agrandit pour éviter les coins vides.
+            // CIStraightenFilter rotates and enlarges to avoid empty corners.
             ci = ci.applyingFilter("CIStraightenFilter", parameters: [kCIInputAngleKey: -e.straighten * .pi / 180])
                 .cropped(to: extent)
         }
         if cropping, e.hasCrop {
-            // Repère Core Image : origine en bas à gauche.
+            // Core Image coordinates: origin at the bottom left.
             let r = CGRect(x: extent.minX + e.cropX * extent.width,
                            y: extent.minY + (1 - e.cropY - e.cropH) * extent.height,
                            width: e.cropW * extent.width, height: e.cropH * extent.height).integral

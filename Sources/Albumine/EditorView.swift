@@ -1,7 +1,7 @@
 import AppKit
 import SwiftUI
 
-/// Éditeur de retouches non destructives (ouvert depuis la visionneuse, touche E).
+/// Non-destructive photo editor (opened from the viewer, key E).
 struct EditorView: View {
     @Environment(PhotoLibrary.self) private var library
     let photo: Photo
@@ -76,7 +76,7 @@ struct EditorView: View {
         .onChange(of: showOriginal) { rerender() }
     }
 
-    // MARK: Panneau
+    // MARK: Panel
 
     private var panel: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -175,7 +175,7 @@ struct EditorView: View {
         }
     }
 
-    // MARK: Rendu
+    // MARK: Rendering
 
     private func rerender() {
         guard let base else { return }
@@ -183,7 +183,7 @@ struct EditorView: View {
         let crop = !cropping
         renderTask?.cancel()
         renderTask = Task {
-            try? await Task.sleep(for: .milliseconds(30)) // regroupe les mouvements de curseur
+            try? await Task.sleep(for: .milliseconds(30)) // coalesces slider movements
             guard !Task.isCancelled else { return }
             let image = await Task.detached(priority: .userInitiated) { EditRenderer.render(base, edits, cropping: crop) }.value
             guard !Task.isCancelled else { return }
@@ -191,7 +191,7 @@ struct EditorView: View {
         }
     }
 
-    /// Plus grand rectangle centré au format choisi.
+    /// Largest centered rectangle with the chosen aspect ratio.
     private func applyAspect() {
         guard let ratio = aspect.ratio(original: imageAspect) else { return }
         var w = 1.0, h = imageAspect / ratio
@@ -200,10 +200,10 @@ struct EditorView: View {
     }
 }
 
-/// Cadre de recadrage déplaçable, avec poignées aux coins et grille des tiers.
+/// Movable crop frame with corner handles and a rule-of-thirds grid.
 struct CropOverlay: View {
     @Binding var crop: CGRect
-    /// Format imposé (largeur / hauteur en pixels), nil = libre.
+    /// Forced aspect ratio (width / height in pixels), nil = free.
     let ratio: Double?
     let imageAspect: Double
 
@@ -215,7 +215,7 @@ struct CropOverlay: View {
             let r = CGRect(x: crop.minX * size.width, y: crop.minY * size.height,
                            width: crop.width * size.width, height: crop.height * size.height)
             ZStack(alignment: .topLeading) {
-                // Assombrit l'extérieur du cadre.
+                // Darkens the area outside the frame.
                 Path { p in
                     p.addRect(CGRect(origin: .zero, size: size))
                     p.addRect(r)
@@ -264,7 +264,7 @@ struct CropOverlay: View {
             .onEnded { _ in start = nil }
     }
 
-    /// Déplace un coin ; le coin opposé reste fixe. Respecte le format s'il est imposé.
+    /// Moves a corner; the opposite corner stays fixed. Keeps the aspect ratio if one is forced.
     private func resize(_ s: CGRect, corner: Int, dx: Double, dy: Double) -> CGRect {
         let left = corner % 2 == 0, top = corner < 2
         let fixedX = left ? s.maxX : s.minX, fixedY = top ? s.maxY : s.minY
@@ -273,7 +273,7 @@ struct CropOverlay: View {
         var w = max(abs(x - fixedX), 0.05)
         var h = max(abs(y - fixedY), 0.05)
         if let ratio {
-            // h (relatif) = w (relatif) × aspect image / format
+            // h (relative) = w (relative) × image aspect / ratio
             h = w * imageAspect / ratio
             let maxH = top ? fixedY : 1 - fixedY
             if h > maxH { h = maxH; w = h * ratio / imageAspect }

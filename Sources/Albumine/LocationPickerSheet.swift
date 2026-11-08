@@ -1,7 +1,7 @@
 import MapKit
 import SwiftUI
 
-/// Choisir le lieu de photos sans GPS : clic sur la carte ou recherche d'un lieu.
+/// Choose the location of photos without GPS: click on the map or search for a place.
 struct LocationPickerSheet: View {
     @Environment(PhotoLibrary.self) private var library
     @Environment(\.dismiss) private var dismiss
@@ -59,7 +59,7 @@ struct LocationPickerSheet: View {
         .padding(20)
         .frame(width: 640, height: 600)
         .onAppear {
-            // Point de départ : une photo voisine dans le temps déjà localisée, sinon la France.
+            // Starting point: an already located photo from the selection, otherwise France.
             if let p = photos.first(where: \.hasLocation), let la = p.latitude, let lo = p.longitude {
                 choose(CLLocationCoordinate2D(latitude: la, longitude: lo))
             }

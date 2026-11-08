@@ -1,13 +1,13 @@
 import CoreLocation
 import Foundation
 
-/// Nom de lieu d'une zone (environ 2 km).
+/// Place name of an area (about 2 km).
 struct Place: Codable, Hashable {
-    var locality: String?   // ville ou village
-    var area: String?       // département / région
+    var locality: String?   // town or village
+    var area: String?       // county / region
     var country: String?
 
-    /// « Avoriaz, France »
+    /// "Avoriaz, France"
     var label: String {
         [locality ?? area, country].compactMap { $0 }.joined(separator: ", ")
     }
@@ -17,11 +17,11 @@ struct Place: Codable, Hashable {
     }
 }
 
-/// Traduit les coordonnées GPS en noms de lieux (géocodage inverse d'Apple),
-/// une zone à la fois pour respecter les limites du service. Résultats dans places.json.
+/// Turns GPS coordinates into place names (Apple reverse geocoding),
+/// one area at a time to respect the service limits. Results in places.json.
 enum PlaceStore {
     static let url = AppPaths.support.appendingPathComponent("places.json")
-    /// Taille d'une zone : 1/50 de degré ≈ 2 km.
+    /// Area size: 1/50 of a degree ≈ 2 km.
     static let cellsPerDegree = 50.0
 
     static func cell(_ lat: Double, _ lon: Double) -> String {
@@ -46,8 +46,8 @@ enum PlaceStore {
 
     enum Outcome {
         case found(Place)
-        case nothing          // pas de lieu (océan…)
-        case retryLater       // limite du service ou réseau indisponible
+        case nothing          // no place (ocean…)
+        case retryLater       // service rate limit or network unavailable
     }
 
     static func lookup(_ cell: String) async -> Outcome {

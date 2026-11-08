@@ -4,7 +4,7 @@ import AppKit
 struct ContentView: View {
     @Environment(PhotoLibrary.self) private var library
 
-    /// ALBUMINE_START_VIEW=map : ouvre directement la carte (tests).
+    /// ALBUMINE_START_VIEW=map: opens the map directly (tests).
     @Etat private var sidebar: SidebarItem? = ProcessInfo.processInfo.environment["ALBUMINE_START_VIEW"] == "map" ? .map : .all
     @Etat private var search = ""
     @Etat private var selection: Set<String> = []
@@ -16,10 +16,10 @@ struct ContentView: View {
     @Etat private var showInspector = true
     @Etat private var visible: [Photo] = []
     @Etat private var groups: [PhotoGroup] = []
-    // Visionneuse : liste affichée (la grille, ou un groupe de la carte) et position.
+    // Viewer: displayed list (the grid, or a map cluster) and position.
     @Etat private var viewerList: [Photo]?
     @Etat private var viewerIndex = 0
-    // Dialogues
+    // Dialogs
     @Etat private var newAlbumPhotos: [Photo]?
     @Etat private var albumName = ""
     @Etat private var confirmTrashCopies = false
@@ -34,7 +34,7 @@ struct ContentView: View {
     @Etat private var yearAnchors: [(year: Int, id: String)] = []
     @FocusState private var gridFocused: Bool
 
-    /// Tout ce qui influence la liste affichée. Elle n'est recalculée que si ceci change.
+    /// Everything that affects the displayed list. It is recomputed only when this changes.
     private struct FilterKey: Equatable {
         var revision: Int
         var metadataRevision: Int
@@ -60,8 +60,8 @@ struct ContentView: View {
                   sidebar: sidebar, search: search, sort: sort, grouping: grouping, minRating: minRating)
     }
 
-    /// La liste ne dépend des notes/étiquettes/personnes que pour certaines vues :
-    /// ailleurs, noter une photo ne recalcule rien.
+    /// The list depends on ratings/tags/people only in some views:
+    /// elsewhere, rating a photo recomputes nothing.
     private var dependsOnMetadata: Bool {
         if minRating > 0 || !search.isEmpty { return true }
         switch sidebar ?? .all {
@@ -127,7 +127,7 @@ struct ContentView: View {
             Text(library.picasaSummary?.message ?? "")
         }
         .task(id: filterKey) {
-            // Petite temporisation pendant la frappe dans la recherche.
+            // Short debounce while typing in the search field.
             if !search.isEmpty { try? await Task.sleep(for: .milliseconds(200)) }
             guard !Task.isCancelled else { return }
             let start = Date()
@@ -137,7 +137,7 @@ struct ContentView: View {
         }
     }
 
-    // MARK: Visionneuse
+    // MARK: Viewer
 
     @ViewBuilder
     private var viewer: some View {
@@ -163,7 +163,7 @@ struct ContentView: View {
         viewerList = list
     }
 
-    // MARK: Contenu
+    // MARK: Content
 
     @ViewBuilder
     private var detail: some View {
@@ -229,7 +229,7 @@ struct ContentView: View {
         }
     }
 
-    // MARK: Grille
+    // MARK: Grid
 
     private var grid: some View {
         let photos = visible
@@ -392,12 +392,12 @@ struct ContentView: View {
     }
 
     private func dropToAlbum(_ album: String, _ ids: [String]) {
-        // Glisser une photo de la sélection = glisser toute la sélection.
+        // Dragging a selected photo drags the whole selection.
         let expanded = ids.count == 1 && selection.contains(ids[0]) ? Array(selection) : ids
         library.addPhotos(expanded.compactMap { library.photo(id: $0) }, toAlbum: album)
     }
 
-    // MARK: Bandeaux
+    // MARK: Banners
 
     @ViewBuilder
     private var picasaBanner: some View {
@@ -528,7 +528,7 @@ struct ContentView: View {
         }
     }
 
-    // MARK: Disque débranché, XMP, souvenirs
+    // MARK: Disconnected drive, XMP, memories
 
     private var damagedBar: some View {
         Banner(systemImage: "exclamationmark.triangle") {
@@ -589,7 +589,7 @@ struct ContentView: View {
         }
     }
 
-    // MARK: Frise chronologique
+    // MARK: Timeline
 
     private var availableYears: [Int] {
         guard let newest = library.byDateNewest.first?.date, let oldest = library.byDateNewest.last?.date else { return [] }
@@ -608,7 +608,7 @@ struct ContentView: View {
         }
     }
 
-    /// Premier élément de chaque année (liste triée par date seulement), par recherche dichotomique.
+    /// First item of each year (date-sorted lists only), by binary search.
     private func computeYearAnchors(_ list: [Photo]) -> [(year: Int, id: String)] {
         guard sort != .name, grouping != .folder, list.count > 50,
               ![.duplicates, .similar, .rejects, .unnamedFaces, .map].contains(sidebar ?? .all),
@@ -621,7 +621,7 @@ struct ContentView: View {
         for y in ascending ? years : years.reversed() {
             guard let start = cal.date(from: DateComponents(year: y)),
                   let end = cal.date(from: DateComponents(year: y + 1)) else { continue }
-            // Premier indice dont la date entre dans l'année (dans l'ordre de la liste).
+            // First index whose date falls within the year (in list order).
             var lo = 0, hi = list.count
             while lo < hi {
                 let mid = (lo + hi) / 2
@@ -633,7 +633,7 @@ struct ContentView: View {
         return anchors
     }
 
-    // MARK: Suggestions de recherche
+    // MARK: Search suggestions
 
     @ViewBuilder
     private var searchSuggestions: some View {
@@ -687,7 +687,7 @@ struct ContentView: View {
         }
     }
 
-    // MARK: Sélection et clavier
+    // MARK: Selection and keyboard
 
     private var selectedPhotos: [Photo] {
         selection.compactMap { library.photo(id: $0) }
@@ -732,7 +732,7 @@ struct ContentView: View {
         return .handled
     }
 
-    // MARK: Filtrage et regroupement
+    // MARK: Filtering and grouping
 
     private func computeList() -> ([Photo], [PhotoGroup]) {
         let item = sidebar ?? .all
@@ -740,7 +740,7 @@ struct ContentView: View {
         if item == .similar { return idGroups(library.similarGroups ?? [], title: { items in
             "Série de \(items.count) photos" }) }
 
-        // Liste déjà triée par date (tri fait une seule fois par la bibliothèque).
+        // List already sorted by date (sorted once by the library).
         var list = sort == .oldest ? Array(library.byDateNewest.reversed()) : library.byDateNewest
         switch item {
         case .all, .duplicates: break
@@ -802,7 +802,7 @@ struct ContentView: View {
             }
         }
 
-        // Un dossier affiché seul n'a pas besoin d'en-tête de dossier.
+        // A single folder view needs no folder header.
         let effective: PhotoGrouping = {
             if case .folder = item, grouping == .folder { return .none }
             return grouping
@@ -829,8 +829,8 @@ struct ContentView: View {
         }
     }
 
-    /// Événements : une coupure quand plus de 6 h séparent deux photos,
-    /// ou plus d'1 h et plus de 40 km. Titre = lieu le plus fréquent, sinon dossier.
+    /// Events: a break when more than 6 h separate two photos,
+    /// or more than 1 h and 40 km. Title = most frequent place, otherwise folder.
     private func eventGroups(_ list: [Photo]) -> ([Photo], [PhotoGroup]) {
         var groups: [PhotoGroup] = []
         var start = 0
@@ -872,7 +872,7 @@ struct ContentView: View {
         return sameDay ? "\(count) · \(a)" : "\(count) · \(a) – \(b)"
     }
 
-    /// Sections à partir de groupes d'identifiants (photos similaires…).
+    /// Sections built from groups of identifiers (similar photos…).
     private func idGroups(_ idGroups: [[String]], title: ([Photo]) -> String) -> ([Photo], [PhotoGroup]) {
         var list: [Photo] = []
         var groups: [PhotoGroup] = []
@@ -888,7 +888,7 @@ struct ContentView: View {
         return (list, groups)
     }
 
-    /// Découpe une liste triée en sections contiguës, dans l'ordre de première apparition.
+    /// Splits a sorted list into contiguous sections, in order of first appearance.
     private func group(_ list: [Photo], by key: (Photo) -> (key: String, title: String, folder: String?)) -> ([Photo], [PhotoGroup]) {
         var order: [String] = []
         var buckets: [String: [Photo]] = [:]
@@ -963,7 +963,7 @@ struct ContentView: View {
         return selection.isEmpty ? count : "\(count) · \(selection.count.formatted()) sélectionné\(selection.count > 1 ? "s" : "")"
     }
 
-    // MARK: Barre d'outils
+    // MARK: Toolbar
 
     @ToolbarContentBuilder
     private var toolbar: some ToolbarContent {
@@ -1060,7 +1060,7 @@ struct ContentView: View {
     }
 }
 
-/// En-tête de section (dossier, mois, année…), épinglé en haut pendant le défilement.
+/// Section header (folder, month, year…), pinned to the top while scrolling.
 struct GroupHeader: View {
     let group: PhotoGroup
     let onSelectAll: () -> Void
@@ -1093,7 +1093,7 @@ struct GroupHeader: View {
     }
 }
 
-/// Bandeau d'information au-dessus de la grille.
+/// Information banner above the grid.
 struct Banner<Content: View, Actions: View>: View {
     let systemImage: String
     @ViewBuilder let content: Content
@@ -1180,7 +1180,7 @@ struct PhotoCell: View {
     }
 }
 
-/// Petite étiquette en haut à droite d'une miniature (ex. « À garder » dans les doublons).
+/// Small label at the top right of a thumbnail (e.g. "À garder" / keep, in duplicates).
 struct CellBadge: View {
     let text: String
     var body: some View {
@@ -1194,7 +1194,7 @@ struct CellBadge: View {
     }
 }
 
-/// Frise des années sur le bord droit de la grille : un clic amène à l'année.
+/// Year timeline on the right edge of the grid: a click jumps to that year.
 struct TimelineBar: View {
     let anchors: [(year: Int, id: String)]
     let onSelect: (String) -> Void

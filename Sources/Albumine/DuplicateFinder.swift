@@ -1,12 +1,12 @@
 import CryptoKit
 import Foundation
 
-/// Recherche des doublons exacts : même taille, puis même empreinte du début et de la fin du fichier.
-/// Avant toute mise à la corbeille, les fichiers sont comparés octet par octet.
+/// Exact duplicate search: same size, then same fingerprint of the file's start and end.
+/// Before anything is moved to the Trash, files are compared byte by byte.
 enum DuplicateFinder {
     static let chunk = 64 * 1024
 
-    /// Empreinte rapide : taille + SHA-256 des 64 premiers et 64 derniers Ko.
+    /// Quick fingerprint: size + SHA-256 of the first and last 64 KB.
     static func quickHash(_ url: URL, size: Int64) -> String? {
         guard let handle = try? FileHandle(forReadingFrom: url) else { return nil }
         defer { try? handle.close() }
@@ -20,7 +20,7 @@ enum DuplicateFinder {
         return "\(size)-" + hasher.finalize().map { String(format: "%02x", $0) }.joined()
     }
 
-    /// Candidats : fichiers de même taille (les seuls qui peuvent être identiques).
+    /// Candidates: files of the same size (the only ones that can be identical).
     static func sameSizeCandidates(_ photos: [Photo]) -> [Photo] {
         Dictionary(grouping: photos.filter { $0.fileSize > 0 }, by: \.fileSize)
             .values.filter { $0.count > 1 }.flatMap { $0 }

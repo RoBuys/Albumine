@@ -1,25 +1,25 @@
 import Foundation
 
-/// Lecture des fichiers `.picasa.ini` / `Picasa.ini` laissés par Picasa dans chaque dossier.
+/// Reads the `.picasa.ini` / `Picasa.ini` files Picasa left in each folder.
 ///
-/// Format (INI) :
+/// Format (INI):
 /// ```
 /// [IMG_0107.JPG]
 /// star=yes
-/// rotate=rotate(1)                       ← quarts de tour horaires
-/// caption=Au bord du lac
-/// albums=ca5106…,516e50…                 ← identifiants d'albums
-/// faces=rect64(2eea21abc6bfca71),cabe15…;rect64(…),…   ← zone + identifiant de personne
+/// rotate=rotate(1)                       ← clockwise quarter turns
+/// caption=By the lake
+/// albums=ca5106…,516e50…                 ← album identifiers
+/// faces=rect64(2eea21abc6bfca71),cabe15…;rect64(…),…   ← region + person identifier
 /// [.album:ca5106…]
-/// name=Vacances 2009
+/// name=Holidays 2009
 /// [Contacts2]
-/// cabe1597b2a421f6=Prénom Nom;email;     ← identifiant de personne → nom
+/// cabe1597b2a421f6=First Last;email;     ← person identifier → name
 /// ```
 enum PicasaImporter {
     static let fileNames = [".picasa.ini", "Picasa.ini", "picasa.ini"]
-    /// Identifiant Picasa d'un visage détecté mais jamais nommé.
+    /// Picasa identifier of a face that was detected but never named.
     static let unknownFace = "ffffffffffffffff"
-    /// Picasa exprime les visages dans l'image brute (avant orientation EXIF) — voir FaceGeometry.
+    /// Picasa stores faces in the raw image (before EXIF orientation) — see FaceGeometry.
     static let rawCoordinates: Bool? = true
 
     struct Face {
@@ -38,12 +38,12 @@ enum PicasaImporter {
 
     struct FolderFile {
         var folder: String
-        var entries: [String: Entry] = [:]   // nom de fichier → données
-        var albums: [String: String] = [:]   // identifiant → nom d'album
-        var contacts: [String: String] = [:] // identifiant → nom de personne
+        var entries: [String: Entry] = [:]   // file name → data
+        var albums: [String: String] = [:]   // identifier → album name
+        var contacts: [String: String] = [:] // identifier → person name
     }
 
-    /// Données prêtes à fusionner pour une photo (chemin complet).
+    /// Data ready to be merged for one photo (full path).
     struct Imported {
         var star = false
         var rotation = 0
@@ -54,7 +54,7 @@ enum PicasaImporter {
         var edits: PhotoEdits?
     }
 
-    /// Fichiers Picasa présents dans ces dossiers.
+    /// Picasa files present in these folders.
     static func iniFiles(in folders: [String]) -> [URL] {
         var result: [URL] = []
         let fm = FileManager.default
@@ -70,8 +70,8 @@ enum PicasaImporter {
         return result
     }
 
-    /// Lit tous les fichiers puis résout les noms de personnes et d'albums
-    /// (une personne peut être définie dans le fichier d'un autre dossier).
+    /// Reads all files, then resolves person and album names
+    /// (a person may be defined in another folder's file).
     static func load(_ files: [URL]) -> [String: Imported] {
         let parsed = files.compactMap(parse)
         var contacts: [String: String] = [:]
@@ -92,7 +92,7 @@ enum PicasaImporter {
                     if let name, !imp.people.contains(name) { imp.people.append(name) }
                     imp.faces.append(FaceRegion(name: name, x: face.x, y: face.y, w: face.w, h: face.h, raw: rawCoordinates))
                 }
-                // Visages jamais nommés : on garde la zone, sans nom.
+                // Faces never named: keep the region, without a name.
                 for face in e.faces where face.contact == unknownFace {
                     imp.faces.append(FaceRegion(name: nil, x: face.x, y: face.y, w: face.w, h: face.h, raw: rawCoordinates))
                 }
@@ -105,7 +105,7 @@ enum PicasaImporter {
 
     static func parse(_ url: URL) -> FolderFile? {
         guard let data = try? Data(contentsOf: url) else { return nil }
-        // Les fichiers récents sont en UTF-8 ; les plus anciens en Windows-1252.
+        // Recent files are UTF-8; older ones Windows-1252.
         let text = String(data: data, encoding: .utf8) ?? String(data: data, encoding: .windowsCP1252) ?? ""
         var file = FolderFile(folder: url.deletingLastPathComponent().path)
         var section = ""
@@ -131,7 +131,7 @@ enum PicasaImporter {
             let value = String(line[line.index(after: eq)...])
 
             if section == "Contacts2" {
-                // « Prénom Nom;email;… » → on garde le nom.
+                // "First Last;email;…" → keep the name.
                 let name = value.split(separator: ";", omittingEmptySubsequences: false).first
                     .map { $0.trimmingCharacters(in: .whitespaces) } ?? ""
                 if !name.isEmpty { file.contacts[key] = name }
@@ -153,7 +153,7 @@ enum PicasaImporter {
         return file
     }
 
-    /// « enhance=1;bw=1; » → retouches équivalentes (les autres filtres Picasa sont ignorés).
+    /// "enhance=1;bw=1;" → equivalent edits (other Picasa filters are ignored).
     static func parseFilters(_ value: String) -> PhotoEdits? {
         var e = PhotoEdits()
         for part in value.split(separator: ";") {
@@ -171,13 +171,13 @@ enum PicasaImporter {
         return e.isIdentity ? nil : e
     }
 
-    /// « rotate(3) » → 3
+    /// "rotate(3)" → 3
     static func parseRotation(_ value: String) -> Int {
         let digits = value.filter(\.isNumber)
         return (Int(digits) ?? 0) % 4
     }
 
-    /// « rect64(2eea21abc6bfca71),cabe1597b2a421f6;rect64(…),… »
+    /// "rect64(2eea21abc6bfca71),cabe1597b2a421f6;rect64(…),…"
     static func parseFaces(_ value: String) -> [Face] {
         value.split(separator: ";").compactMap { part in
             let pieces = part.split(separator: ",")
@@ -189,8 +189,8 @@ enum PicasaImporter {
         }
     }
 
-    /// 64 bits = gauche, haut, droite, bas sur 16 bits chacun (fraction de 65535).
-    /// Picasa omet les zéros de tête, d'où le remplissage à 16 caractères.
+    /// 64 bits = left, top, right, bottom on 16 bits each (fraction of 65535).
+    /// Picasa drops leading zeros, hence the padding to 16 characters.
     static func parseRect64(_ hex: String) -> (x: Double, y: Double, w: Double, h: Double)? {
         guard hex.count <= 16, let v = UInt64(String(repeating: "0", count: 16 - hex.count) + hex, radix: 16)
         else { return nil }
@@ -201,7 +201,7 @@ enum PicasaImporter {
     }
 }
 
-/// Résumé affiché à la fin de l'import.
+/// Summary shown at the end of the import.
 struct PicasaImportSummary: Identifiable {
     let id = UUID()
     var files = 0

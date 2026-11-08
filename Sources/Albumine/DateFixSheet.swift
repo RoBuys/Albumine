@@ -1,7 +1,7 @@
 import SwiftUI
 
-/// Correction des dates d'une sélection : décalage (appareil mal réglé) ou date précise (photos scannées).
-/// Les fichiers ne sont pas modifiés (la date est écrite dans le XMP si l'option est activée).
+/// Date correction for a selection: shift (wrong camera clock) or exact date (scanned photos).
+/// Files are not modified (the date is written to the XMP when that option is on).
 struct DateFixSheet: View {
     @Environment(PhotoLibrary.self) private var library
     @Environment(\.dismiss) private var dismiss

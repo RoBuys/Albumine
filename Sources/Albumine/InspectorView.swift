@@ -1,7 +1,7 @@
 import SwiftUI
 import AppKit
 
-/// Panneau de droite : aperçu, note, étiquettes et informations EXIF de la sélection.
+/// Right-hand panel: preview, rating, tags and EXIF information of the selection.
 struct InspectorView: View {
     @Environment(PhotoLibrary.self) private var library
     let photos: [Photo]
@@ -301,7 +301,7 @@ struct InspectorView: View {
         }
     }
 
-    // MARK: Utilitaires
+    // MARK: Helpers
 
     private var shootingSettings: String? {
         guard let info else { return nil }
@@ -333,10 +333,10 @@ struct InspectorView: View {
     }
 }
 
-/// Vignette ronde d'un visage, découpée dans la miniature.
+/// Round face thumbnail, cropped from the thumbnail.
 struct FaceCropView: View {
     let url: URL
-    /// Zone dans l'image orientée EXIF (sans rotation d'affichage).
+    /// Region in the EXIF-oriented image (without display rotation).
     let rect: CGRect
     let rotation: Int
     @Etat private var image: NSImage?

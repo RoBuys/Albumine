@@ -2,24 +2,24 @@ import CoreGraphics
 import Foundation
 import Vision
 
-/// Résultat de l'analyse d'une photo (enregistré dans analysis.json).
+/// Result of a photo's analysis (stored in analysis.json).
 struct AnalysisEntry: Codable {
-    var s: Int64          // taille du fichier
-    var m: Double         // date de modification
-    var l: [String]?      // catégories Vision (identifiants)
-    var a: Float?         // note esthétique Vision (-1 … 1)
-    var u: Bool?          // image « utilitaire » (capture, document…)
-    var b: Float?         // netteté (variance du laplacien)
-    var y: Float?         // luminosité moyenne (0 … 1)
-    var h: UInt64?        // empreinte perceptive (dHash 64 bits)
-    var t: String?        // texte lu dans l'image (OCR)
-    var v: Int?           // version de l'analyse
+    var s: Int64          // file size
+    var m: Double         // modification date
+    var l: [String]?      // Vision categories (identifiers)
+    var a: Float?         // Vision aesthetic score (-1 … 1)
+    var u: Bool?          // "utility" image (screenshot, document…)
+    var b: Float?         // sharpness (variance of the Laplacian)
+    var y: Float?         // mean brightness (0 … 1)
+    var h: UInt64?        // perceptual hash (64-bit dHash)
+    var t: String?        // text read in the image (OCR)
+    var v: Int?           // analysis version
 }
 
-/// Analyse du contenu, entièrement sur le Mac : catégories, qualité, netteté, luminosité, empreinte.
+/// Content analysis, entirely on the Mac: categories, quality, sharpness, brightness, fingerprint.
 enum ContentAnalyzer {
     static let minConfidence: Float = 0.3
-    /// Version 2 : ajout de la lecture du texte.
+    /// Version 2: adds text recognition.
     static let version = 2
 
     static func analyze(_ photo: Photo) -> AnalysisEntry {
@@ -47,7 +47,7 @@ enum ContentAnalyzer {
                 .prefix(10)
                 .map(\.identifier)
             entry.l = labels.isEmpty ? nil : Array(labels)
-            // Texte lisible (panneaux, documents, captures…) : mots d'au moins 3 lettres, sûrs.
+            // Readable text (signs, documents, screenshots…): confident words of at least 3 letters.
             let words = (text.results ?? [])
                 .compactMap { $0.topCandidates(1).first }
                 .filter { $0.confidence >= 0.4 }
@@ -68,7 +68,7 @@ enum ContentAnalyzer {
         return entry
     }
 
-    // MARK: Mesures sur l'image
+    // MARK: Image measurements
 
     struct Gray {
         let width: Int
@@ -96,7 +96,7 @@ enum ContentAnalyzer {
         return ok ? Gray(width: w, height: h, pixels: pixels) : nil
     }
 
-    /// Variance du laplacien : faible = image floue.
+    /// Variance of the Laplacian: low = blurry image.
     static func sharpness(_ g: Gray) -> Float {
         var sum = 0.0, sumSq = 0.0, n = 0.0
         for y in 1..<(g.height - 1) {
@@ -119,7 +119,7 @@ enum ContentAnalyzer {
         return Float(g.pixels.reduce(0) { $0 + Int($1) }) / Float(g.pixels.count) / 255
     }
 
-    /// dHash : compare chaque pixel à son voisin de droite sur une image 9 × 8.
+    /// dHash: compares each pixel with its right neighbor on a 9 × 8 image.
     static func dHash(_ image: CGImage) -> UInt64? {
         guard let g = grayscale(image, width: 9, height: 8) else { return nil }
         var hash: UInt64 = 0
@@ -149,7 +149,7 @@ enum AnalysisStore {
     }
 }
 
-/// Raisons pour lesquelles une photo semble ratée.
+/// Reasons why a photo looks like a failure.
 enum RejectReason: String, CaseIterable {
     case blurry = "Floues"
     case dark = "Trop sombres"
@@ -157,7 +157,7 @@ enum RejectReason: String, CaseIterable {
     case utility = "Captures d'écran et documents"
     case poor = "Peu réussies"
 
-    /// Seuils calibrés sur 400 photos d'une photothèque réelle (≈ 1–2 % des photos par critère).
+    /// Thresholds calibrated on 400 photos of a real library (≈ 1–2 % of photos per criterion).
     static var blurThreshold: Float = 65
     static var darkThreshold: Float = 0.09
     static var brightThreshold: Float = 0.94
@@ -169,7 +169,7 @@ enum RejectReason: String, CaseIterable {
     static func reason(for e: AnalysisEntry) -> RejectReason? {
         let labels = Set(e.l ?? [])
         if labels.contains("screenshot") { return .utility }
-        // Vision marque beaucoup de photos « utilitaires » : on ne retient que les documents peu réussis.
+        // Vision flags many photos as "utility": only poor-quality documents are kept.
         if e.u == true, !labels.isDisjoint(with: documentLabels), (e.a ?? 0) < 0 { return .utility }
         if let y = e.y, y < darkThreshold { return .dark }
         if let y = e.y, y > brightThreshold { return .bright }
@@ -179,10 +179,10 @@ enum RejectReason: String, CaseIterable {
     }
 }
 
-/// Regroupe les photos presque identiques (rafales, versions retouchées ou redimensionnées).
+/// Groups nearly identical photos (bursts, edited or resized versions).
 enum SimilarFinder {
     static var maxDistance = 10
-    /// Fenêtre de temps pour les rafales et prises successives.
+    /// Time window for bursts and successive shots.
     static var window: TimeInterval = 180
 
     struct Item {
@@ -201,7 +201,7 @@ enum SimilarFinder {
         }
         func union(_ a: Int, _ b: Int) { parent[find(a)] = find(b) }
 
-        // 1. Prises proches dans le temps et visuellement semblables.
+        // 1. Shots close in time and visually similar.
         for i in sorted.indices {
             var j = i + 1
             while j < sorted.count, sorted[j].date.timeIntervalSince(sorted[i].date) <= window {
@@ -209,7 +209,7 @@ enum SimilarFinder {
                 j += 1
             }
         }
-        // 2. Même image quelle que soit la date (copie redimensionnée, réexportée…).
+        // 2. Same image whatever the date (resized or re-exported copy…).
         var byHash: [UInt64: Int] = [:]
         for (i, item) in sorted.enumerated() where item.hash != 0 {
             if let j = byHash[item.hash] { union(i, j) } else { byHash[item.hash] = i }

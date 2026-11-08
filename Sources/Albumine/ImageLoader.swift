@@ -4,9 +4,9 @@ import ImageIO
 import SwiftUI
 import UniformTypeIdentifiers
 
-/// Limite le nombre de décodages simultanés (un disque dur externe s'effondre sinon).
-/// Les demandes en attente sont servies de la plus récente à la plus ancienne :
-/// quand on fait défiler, ce qui est à l'écran passe en premier.
+/// Limits concurrent decodes (an external hard drive collapses otherwise).
+/// Pending requests are served newest first:
+/// while scrolling, what is on screen comes first.
 actor AsyncLimiter {
     private let limit: Int
     private var running = 0
@@ -28,12 +28,12 @@ actor AsyncLimiter {
         if waiters.isEmpty {
             running -= 1
         } else {
-            waiters.removeLast().resume() // le créneau passe directement au suivant
+            waiters.removeLast().resume() // the slot goes straight to the next waiter
         }
     }
 }
 
-/// Miniatures : cache mémoire → cache disque (~/Library/Caches/Albumine) → décodage de l'original.
+/// Thumbnails: memory cache → disk cache (~/Library/Caches/Albumine) → decoding the original.
 enum ImageLoader {
     static let thumbnailPixels = 512
     static let viewerPixels = 3200
@@ -54,15 +54,15 @@ enum ImageLoader {
     }
 
     /// - Parameters:
-    ///   - rotation: quarts de tour horaires appliqués à l'affichage (rotations Picasa / utilisateur).
-    ///   - urgent: ignore la file d'attente (visionneuse).
+    /// - rotation: clockwise quarter turns applied for display (Picasa / user rotations).
+    /// - urgent: skips the queue (viewer).
     static func load(_ url: URL, maxPixel: Int, rotation: Int = 0, edits: PhotoEdits? = nil,
                      cropping: Bool = true, urgent: Bool = false) async -> NSImage? {
         let edits = (edits?.isIdentity ?? true) ? nil : edits
         if cropping, let hit = cached(url, maxPixel: maxPixel, rotation: rotation, edits: edits) { return hit }
         if !urgent {
             await limiter.acquire()
-            // La cellule a pu disparaître de l'écran pendant l'attente.
+            // The cell may have scrolled off screen while waiting.
             if Task.isCancelled {
                 await limiter.release()
                 return nil
@@ -78,7 +78,7 @@ enum ImageLoader {
                 Debug.log("échec du décodage : \(url.path)")
                 return nil
             }
-            // Le cache disque garde l'image non pivotée : changer la rotation ne relit pas l'original.
+            // The disk cache keeps the unrotated image: changing the rotation does not re-read the original.
             if let cacheFile { writeJPEG(cg, to: cacheFile) }
             return nsImage(EditRenderer.render(ImageDecoding.rotate(cg, rotation), edits, cropping: cropping))
         }.value
@@ -87,8 +87,8 @@ enum ImageLoader {
         return image
     }
 
-    /// Miniature 512 px non pivotée, depuis le cache disque ou en la créant (fil d'arrière-plan).
-    /// L'analyse du contenu remplit ainsi le cache : la grille devient plus rapide ensuite.
+    /// Unrotated 512 px thumbnail, from the disk cache or created (background thread).
+    /// Content analysis thus fills the cache: the grid gets faster afterwards.
     static func diskThumbnail(_ url: URL) -> CGImage? {
         let cacheFile = diskCacheURL(for: url)
         if let cacheFile, let cg = readImage(cacheFile) { return cg }
@@ -101,9 +101,9 @@ enum ImageLoader {
         NSImage(cgImage: cg, size: NSSize(width: cg.width, height: cg.height))
     }
 
-    /// Nom de fichier dérivé du chemin, de la taille et de la date : une photo modifiée est régénérée.
-    /// Signatures (taille, date) connues par la bibliothèque : les miniatures en cache restent
-    /// trouvables quand le disque est débranché, et on évite un accès disque par miniature.
+    /// File name derived from path, size and date: a modified photo gets a new thumbnail.
+    /// Signatures (size, date) known to the library: cached thumbnails stay
+    /// findable when the drive is disconnected, and we avoid one disk access per thumbnail.
     private static let signatures = Mutex<[String: String]>([:])
 
     static func registerSignatures(_ photos: [Photo]) {

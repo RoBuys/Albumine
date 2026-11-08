@@ -4,14 +4,14 @@ import SwiftUI
 import UniformTypeIdentifiers
 
 struct ExportOptions {
-    /// Plus grand côté en pixels ; nil = taille d'origine.
+    /// Longest side in pixels; nil = original size.
     var maxPixel: Int? = 2048
     var quality: Double = 0.85
     var applyRotation = true
     var removeLocation = false
 }
 
-/// Export de la sélection vers un dossier (JPEG redimensionnés, vidéos copiées telles quelles).
+/// Exports the selection to a folder (resized JPEGs, videos copied as they are).
 struct ExportSheet: View {
     @Environment(PhotoLibrary.self) private var library
     @Environment(\.dismiss) private var dismiss
@@ -125,7 +125,7 @@ enum Exporter {
         guard var image = CGImageSourceCreateThumbnailAtIndex(source, 0, decodeOptions as CFDictionary) else { throw Failure() }
         if options.applyRotation { image = EditRenderer.render(ImageDecoding.rotate(image, rotation), edits) }
 
-        // Métadonnées d'origine conservées (date, appareil…), orientation remise à 1.
+        // Original metadata kept (date, camera…), orientation reset to 1.
         var meta = props
         meta[kCGImagePropertyOrientation] = 1
         if var tiff = meta[kCGImagePropertyTIFFDictionary] as? [CFString: Any] {
@@ -146,7 +146,7 @@ enum Exporter {
         return dest
     }
 
-    /// « photo.jpg » → « photo (2).jpg » si le nom est déjà pris.
+    /// "photo.jpg" → "photo (2).jpg" if the name is already taken.
     static func unique(_ url: URL) -> URL {
         let fm = FileManager.default
         guard fm.fileExists(atPath: url.path) else { return url }

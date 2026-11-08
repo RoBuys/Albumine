@@ -1,8 +1,8 @@
 import MapKit
 import SwiftUI
 
-/// Carte des photos géolocalisées. Les photos proches sont regroupées selon le niveau de zoom ;
-/// un clic sur un groupe affiche ses photos en bas (double-clic : visionneuse).
+/// Map of geotagged photos. Nearby photos are clustered according to the zoom level;
+/// clicking a cluster shows its photos at the bottom (double-click: viewer).
 struct PhotoMapView: View {
     @Environment(PhotoLibrary.self) private var library
     let photos: [Photo]
@@ -15,9 +15,9 @@ struct PhotoMapView: View {
         let photos: [Photo]
     }
 
-    /// Cadrage calculé une seule fois. Surtout pas `.automatic` : la carte se recadrerait à chaque
-    /// nouvelle photo géolocalisée (pendant la découverte) → recadrage → regroupement → recadrage…
-    /// jusqu'à ce qu'AppKit arrête l'application (trop de passes de mise en page).
+    /// Framing computed only once. Never `.automatic`: the map would reframe on every
+    /// new geotagged photo (during discovery) → reframe → recluster → reframe…
+    /// until AppKit kills the app (too many layout passes).
     @Etat private var camera: MapCameraPosition = .region(MKCoordinateRegion(
         center: CLLocationCoordinate2D(latitude: 46.5, longitude: 2.5),
         span: MKCoordinateSpan(latitudeDelta: 12, longitudeDelta: 12)))
@@ -58,7 +58,7 @@ struct PhotoMapView: View {
                     MapScaleView()
                 }
                 .onMapCameraChange(frequency: .onEnd) { context in
-                    // Ignore les micro-variations (arrondis) qui relanceraient un regroupement inutile.
+                    // Ignore tiny variations (rounding) that would trigger a useless recluster.
                     if let r = region,
                        abs(r.center.latitude - context.region.center.latitude) < r.span.latitudeDelta / 50,
                        abs(r.center.longitude - context.region.center.longitude) < r.span.longitudeDelta / 50,
@@ -108,7 +108,7 @@ struct PhotoMapView: View {
         .background(.regularMaterial)
     }
 
-    /// Cadre la carte sur les photos, une seule fois (ensuite, seul l'utilisateur la déplace).
+    /// Frames the map on the photos, once (afterwards only the user moves it).
     private func frameOnce() {
         let list = located
         guard !list.isEmpty else { return }
@@ -123,7 +123,7 @@ struct PhotoMapView: View {
         camera = .region(r)
     }
 
-    /// Regroupement différé et regroupé : jamais pendant une passe de mise en page.
+    /// Deferred, coalesced clustering: never during a layout pass.
     private func scheduleRecluster() {
         reclusterTask?.cancel()
         reclusterTask = Task {
@@ -133,7 +133,7 @@ struct PhotoMapView: View {
         }
     }
 
-    /// Regroupe les photos sur une grille d'environ 10 × 10 cases de la zone visible.
+    /// Clusters photos on a grid of about 10 × 10 cells over the visible area.
     private func recluster() {
         let list = located
         let span = region?.span ?? MKCoordinateSpan(latitudeDelta: 140, longitudeDelta: 300)
@@ -143,7 +143,7 @@ struct PhotoMapView: View {
         for p in list {
             guard let lat = p.latitude, let lon = p.longitude else { continue }
             if let r = region {
-                // Zone visible + une marge, pour ne pas dessiner des milliers d'épingles hors écran.
+                // Visible area + a margin, to avoid drawing thousands of off-screen pins.
                 guard abs(lat - r.center.latitude) < r.span.latitudeDelta,
                       abs(lon - r.center.longitude) < r.span.longitudeDelta else { continue }
             }
@@ -157,7 +157,7 @@ struct PhotoMapView: View {
                            photos: items.sorted { $0.date > $1.date })
         }
         .sorted { $0.id < $1.id }
-        // Ne touche à la carte que si les pastilles ont réellement changé.
+        // Only touch the map if the clusters actually changed.
         let signature = { (c: [Cluster]) in c.map { "\($0.id):\($0.photos.count)" } }
         guard signature(newClusters) != signature(clusters) else { return }
         clusters = newClusters

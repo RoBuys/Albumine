@@ -1,10 +1,10 @@
 import CoreServices
 import Foundation
 
-/// Surveille les dossiers suivis (FSEvents) et prévient quand des photos ou vidéos
-/// apparaissent, disparaissent ou sont renommées. Les fichiers XMP, Picasa et cachés sont ignorés.
+/// Watches the tracked folders (FSEvents) and reports when photos or videos
+/// appear, disappear or are renamed. XMP, Picasa and hidden files are ignored.
 final class FolderWatcher {
-    /// Objet transmis à FSEvents (retenu par le flux, libéré avec lui).
+    /// Object handed to FSEvents (retained by the stream, released with it).
     private final class Handler {
         let onChange: () -> Void
         init(_ onChange: @escaping () -> Void) { self.onChange = onChange }
@@ -25,7 +25,7 @@ final class FolderWatcher {
         let callback: FSEventStreamCallback = { _, info, count, eventPaths, flags, _ in
             guard let info else { return }
             let handler = Unmanaged<Handler>.fromOpaque(info).takeUnretainedValue()
-            // Avec kFSEventStreamCreateFlagUseCFTypes, les chemins arrivent dans un CFArray de CFString.
+            // With kFSEventStreamCreateFlagUseCFTypes, paths arrive as a CFArray of CFString.
             let list = Unmanaged<CFArray>.fromOpaque(eventPaths).takeUnretainedValue() as? [String] ?? []
             var relevant = false
             for i in 0..<min(count, list.count) {
@@ -53,7 +53,7 @@ final class FolderWatcher {
         if let stream {
             FSEventStreamStop(stream)
             FSEventStreamInvalidate(stream)
-            FSEventStreamRelease(stream) // libère aussi le Handler (callback « release » du contexte)
+            FSEventStreamRelease(stream) // also releases the Handler (the context's "release" callback)
         }
     }
 }

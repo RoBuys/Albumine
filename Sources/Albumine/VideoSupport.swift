@@ -2,10 +2,10 @@ import AVFoundation
 import CoreGraphics
 import Foundation
 
-/// Vidéos : métadonnées (date, lieu) et image de prévisualisation, via AVFoundation.
-/// Les formats que macOS ne sait pas lire (AVI, WMV…) restent listés, avec une icône.
+/// Videos: metadata (date, location) and preview frame, via AVFoundation.
+/// Formats macOS cannot read (AVI, WMV…) stay listed, with an icon.
 enum VideoSupport {
-    /// Lecture synchrone : appelée uniquement depuis des fils d'arrière-plan.
+    /// Synchronous read: called only from background threads.
     static func metadata(of url: URL) -> ExifReader.Quick {
         let asset = AVURLAsset(url: url)
         var quick = ExifReader.Quick()
@@ -34,7 +34,7 @@ enum VideoSupport {
         return nil
     }
 
-    /// « +48.8566+002.3522+035.000/ » → (48.8566, 2.3522)
+    /// "+48.8566+002.3522+035.000/" → (48.8566, 2.3522)
     static func parseISO6709(_ text: String) -> (Double, Double)? {
         var numbers: [Double] = []
         var current = ""

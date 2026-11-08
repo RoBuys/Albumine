@@ -3,8 +3,8 @@ import AVFoundation
 import SwiftUI
 import UniformTypeIdentifiers
 
-/// Diaporama plein écran : fondu enchaîné, léger zoom lent, musique facultative.
-/// Espace : pause · ← → : précédente / suivante · Échap : quitter.
+/// Full-screen slideshow: crossfade, slow zoom, optional music.
+/// Space: pause · ← →: previous / next · Esc: quit.
 struct SlideshowView: View {
     @Environment(PhotoLibrary.self) private var library
     let photos: [Photo]
@@ -112,7 +112,7 @@ struct SlideshowView: View {
         zoomed = false
         shown = (i, image)
         withAnimation(.linear(duration: interval + 1)) { zoomed = true }
-        // Prépare la suivante.
+        // Preloads the next one.
         let next = photos[(i + 1) % photos.count]
         let nextRotation = library.rotation(of: next)
         let nextEdits = library.edits(of: next)

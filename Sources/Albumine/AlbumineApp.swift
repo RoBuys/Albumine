@@ -3,7 +3,7 @@ import AppKit
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
-        // Nécessaire quand l'exécutable est lancé hors d'un .app (swift run).
+        // Needed when the executable runs outside an .app bundle (swift run).
         NSApp.setActivationPolicy(.regular)
         NSApp.activate(ignoringOtherApps: true)
     }

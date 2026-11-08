@@ -4,7 +4,7 @@ import AppKit
 struct SidebarView: View {
     @Environment(PhotoLibrary.self) private var library
     @Binding var selection: SidebarItem?
-    /// Photos glissées sur un album (identifiants).
+    /// Photos dropped onto an album (identifiers).
     let onDropToAlbum: (_ album: String, _ ids: [String]) -> Void
 
     @Etat private var creatingAlbum = false
@@ -213,7 +213,7 @@ struct SidebarView: View {
         }
     }
 
-    /// Bas de la barre latérale : ajout de dossier et tâches en cours.
+    /// Bottom of the sidebar: add folder and running tasks.
     private var status: some View {
         VStack(alignment: .leading, spacing: 6) {
             if library.isImportingPicasa {

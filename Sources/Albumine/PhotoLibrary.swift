@@ -1,30 +1,30 @@
 import SwiftUI
 import AppKit
 
-/// Bibliothèque : dossiers sources surveillés, photos trouvées, notes et étiquettes.
-/// - library.json : dossiers suivis, notes, étiquettes
-/// - index.json   : index des fichiers + EXIF (pour redémarrer sans tout relire)
+/// Library: watched source folders, photos found, ratings and tags.
+/// - library.json: watched folders, ratings, tags
+/// - index.json  : file index + EXIF (to restart without re-reading everything)
 @MainActor
 @Observable
 final class PhotoLibrary {
     private(set) var roots: [URL] = []
-    /// Sous-dossiers exclus de l'analyse (chemins complets).
+    /// Subfolders excluded from the scan (full paths).
     private(set) var excludedPaths: [String] = []
-    /// Personnes masquées de la barre latérale.
+    /// People hidden from the sidebar.
     private(set) var hiddenPeople: Set<String> = []
-    /// Photo de profil choisie : nom → « identifiant photo#indice du visage ».
+    /// Chosen profile picture: name → "photo identifier#face index".
     private(set) var personCovers: [String: String] = [:]
-    /// Photo de profil par défaut (plus grand visage nommé) : nom → (photo, visage).
+    /// Default profile picture (largest named face): name → (photo, face).
     @ObservationIgnored private(set) var defaultCovers: [String: (String, Int)] = [:]
 
-    // Intégrité des fichiers
-    private(set) var damaged: [String: String] = [:]   // identifiant → problème
+    // File integrity
+    private(set) var damaged: [String: String] = [:]   // identifier → problem
     private(set) var integrityDone = 0
     private(set) var integrityTotal = 0
     private(set) var lastIntegrityCheck: Date?
     @ObservationIgnored private var integrityTask: Task<Void, Never>?
 
-    // Sauvegarde
+    // Backup
     private(set) var backupDestination: URL? = UserDefaults.standard.string(forKey: "backupDestination").map { URL(fileURLWithPath: $0) }
     private(set) var lastBackup: Date? = UserDefaults.standard.object(forKey: "lastBackup") as? Date
     private(set) var backupPlan: BackupPlan?
@@ -33,22 +33,22 @@ final class PhotoLibrary {
     private(set) var backupFilesDone = 0
     private(set) var isBackingUp = false
     @ObservationIgnored private var backupTask: Task<Void, Never>?
-    /// Toutes les photos. Modifié par lots pendant la lecture des EXIF :
-    /// évitez de le lire dans un `body` (préférez `revision`, `photoCount`, `photo(id:)`).
+    /// All photos. Modified in batches while EXIF data is read:
+    /// avoid reading it in a `body` (prefer `revision`, `photoCount`, `photo(id:)`).
     private(set) var photos: [Photo] = []
     private(set) var isScanning = false
-    /// Avancement de la lecture des EXIF en arrière-plan.
+    /// Progress of the background EXIF reading.
     private(set) var exifDone = 0
     private(set) var exifTotal = 0
-    /// Incrémenté quand l'ensemble des photos (ou leur ordre) change.
+    /// Incremented when the set of photos (or their order) changes.
     private(set) var revision = 0
-    /// Incrémenté quand des notes, étiquettes, personnes… changent.
+    /// Incremented when ratings, tags, people… change.
     private(set) var metadataRevision = 0
-    /// Toutes les photos, de la plus récente à la plus ancienne (tri fait une seule fois).
+    /// All photos, newest first (sorted only once).
     @ObservationIgnored private(set) var byDateNewest: [Photo] = []
     @ObservationIgnored private var saveTask: Task<Void, Never>?
 
-    // Données dérivées, recalculées seulement quand c'est nécessaire.
+    // Derived data, recomputed only when needed.
     private(set) var photoCount = 0
     private(set) var folders: [FolderSummary] = []
     private(set) var allTags: [(name: String, count: Int)] = []
@@ -56,32 +56,32 @@ final class PhotoLibrary {
     private(set) var allPeople: [(name: String, count: Int)] = []
     private(set) var allAlbums: [(name: String, count: Int)] = []
 
-    // Albums virtuels (liste conservée même quand un album est vide)
+    // Virtual albums (list kept even when an album is empty)
     private(set) var albumNames: [String] = []
 
-    // Compteurs pour la barre latérale
+    // Sidebar counters
     private(set) var videoCount = 0
     private(set) var locatedCount = 0
     private(set) var unnamedFaceCount = 0
 
-    // Doublons
+    // Duplicates
     private(set) var duplicateGroups: [[String]]?
     private(set) var duplicateKeepers: Set<String> = []
     private(set) var isFindingDuplicates = false
     private(set) var isTrashing = false
     private(set) var duplicateDone = 0
     private(set) var duplicateTotal = 0
-    /// Message à afficher (fin d'une opération longue).
+    /// Message to show (end of a long operation).
     var notice: String?
 
-    // Visages
+    // Faces
     private(set) var faceDone = 0
     private(set) var faceTotal = 0
     private(set) var facePreparing = false
     @ObservationIgnored private var faceTask: Task<Void, Never>?
     @ObservationIgnored private var faceRefs: FaceReferences?
 
-    // Analyse du contenu (catégories, qualité, empreinte) — analysis.json
+    // Content analysis (categories, quality, fingerprint) — analysis.json
     @ObservationIgnored private(set) var analysis: [String: AnalysisEntry] = [:]
     private(set) var analysisRevision = 0
     private(set) var contentDone = 0
@@ -90,31 +90,31 @@ final class PhotoLibrary {
     private(set) var rejectCount = 0
     @ObservationIgnored private var contentTask: Task<Void, Never>?
 
-    // Souvenirs : photos prises un même jour, les années précédentes
+    // Memories: photos taken on the same day in previous years
     private(set) var memoryIDs: Set<String> = []
     private(set) var memoryYears: [Int] = []
 
-    // Photos similaires (calculées à la demande)
+    // Similar photos (computed on demand)
     private(set) var similarGroups: [[String]]?
     private(set) var similarBest: Set<String> = []
     private(set) var similarRevision = 0
     private(set) var isFindingSimilar = false
 
-    // Lieux — places.json
+    // Places — places.json
     @ObservationIgnored private(set) var places: [String: Place] = [:]
     private(set) var allPlaces: [(name: String, count: Int)] = []
     private(set) var placeDone = 0
     private(set) var placeTotal = 0
     @ObservationIgnored private var placeTask: Task<Void, Never>?
 
-    // Disque débranché, surveillance des dossiers
+    // Disconnected drive, folder watching
     private(set) var offlineRoots: [URL] = []
     private(set) var offlineCount = 0
     @ObservationIgnored private var watcher: FolderWatcher?
     @ObservationIgnored private var volumeObservers: [NSObjectProtocol] = []
     @ObservationIgnored private var rescanSoonTask: Task<Void, Never>?
 
-    // Fichiers XMP
+    // XMP files
     private(set) var sidecarCount = 0
     @ObservationIgnored private var sidecarPaths: [String] = []
     private(set) var writeXMP = UserDefaults.standard.bool(forKey: "writeXMP")
@@ -125,7 +125,7 @@ final class PhotoLibrary {
     @ObservationIgnored private var xmpTask: Task<Void, Never>?
     @ObservationIgnored private let xmpStateURL = AppPaths.support.appendingPathComponent("xmp-state.json")
 
-    // Import Picasa
+    // Picasa import
     private(set) var picasaFilesFound = 0
     private(set) var picasaImported = false
     private(set) var isImportingPicasa = false
@@ -154,7 +154,7 @@ final class PhotoLibrary {
         load()
         if let data = try? Data(contentsOf: xmpStateURL),
            let state = try? JSONDecoder().decode([String: String].self, from: data) { xmpState = state }
-        // Branchement / débranchement d'un disque : on relit les dossiers.
+        // A drive was connected / disconnected: rescan the folders.
         let nc = NSWorkspace.shared.notificationCenter
         for name in [NSWorkspace.didMountNotification, NSWorkspace.didUnmountNotification] {
             volumeObservers.append(nc.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
@@ -178,7 +178,7 @@ final class PhotoLibrary {
 
     func photo(id: String) -> Photo? { indexByID[id].map { photos[$0] } }
 
-    // MARK: Dossiers
+    // MARK: Folders
 
     func addFolderWithPanel() {
         let panel = NSOpenPanel()
@@ -215,7 +215,7 @@ final class PhotoLibrary {
         rescan()
     }
 
-    /// Exclut des sous-dossiers d'un dossier suivi (ils ne sont plus analysés ni affichés).
+    /// Excludes subfolders of a watched folder (no longer scanned or shown).
     func excludeFolders(_ urls: [URL]) {
         var changed = false
         for url in urls {
@@ -250,7 +250,7 @@ final class PhotoLibrary {
         rescan()
     }
 
-    /// Nombre d'éléments trouvés sous un dossier suivi.
+    /// Number of items found under a watched folder.
     func count(under root: URL) -> Int {
         let prefix = root.path + "/"
         return photos.reduce(0) { $0 + ($1.id.hasPrefix(prefix) ? 1 : 0) }
@@ -260,7 +260,7 @@ final class PhotoLibrary {
         roots.first { path == $0.path || path.hasPrefix($0.path + "/") }
     }
 
-    // MARK: Analyse
+    // MARK: Scanning
 
     func rescan() {
         let roots = self.roots
@@ -278,7 +278,7 @@ final class PhotoLibrary {
             let result = await Task.detached(priority: .userInitiated) { () -> ScanResult in
                 let index = IndexStore.load()
                 var result = PhotoScanner.scan(reachable, index: index, excluded: excluded)
-                // Disque débranché : on garde ses photos, d'après l'index (miniatures en cache).
+                // Disconnected drive: keep its photos, from the index (cached thumbnails).
                 for root in missing { result.photos += PhotoScanner.offlinePhotos(under: root, index: index, excluded: excluded) }
                 return result
             }.value
@@ -302,7 +302,7 @@ final class PhotoLibrary {
 
     private func setPhotos(_ incoming: [Photo]) {
         var newPhotos = incoming
-        // Lieux ajoutés à la main.
+        // Locations added by hand.
         for i in newPhotos.indices {
             if let m = metadata[newPhotos[i].id] {
                 if let la = m.lat, let lo = m.lon {
@@ -328,7 +328,7 @@ final class PhotoLibrary {
         detectPicasaFiles()
     }
 
-    /// Lit les EXIF manquants par lots, en laissant la priorité aux miniatures.
+    /// Reads missing EXIF data in batches, giving priority to thumbnails.
     private func startExifPass(_ pending: [Int], generation: Int) {
         let urls = pending.map { photos[$0].url }
         exifTotal = pending.count
@@ -338,7 +338,7 @@ final class PhotoLibrary {
             var start = 0
             var lastSave = 0
             while start < pending.count {
-                // Pause tant que des miniatures sont en cours de chargement.
+                // Pause while thumbnails are loading.
                 while !(await ImageLoader.limiter.isIdle) {
                     try? await Task.sleep(for: .milliseconds(150))
                     if Task.isCancelled { return }
@@ -370,12 +370,12 @@ final class PhotoLibrary {
             recomputeFolders()
             recomputeCounts()
             resort()
-            revision += 1 // re-trie une seule fois avec les vraies dates
+            revision += 1 // re-sorts once with the real dates
             afterExifPass()
         }
     }
 
-    /// Appelé quand toutes les dates et coordonnées sont lues.
+    /// Called once all dates and coordinates have been read.
     private func afterExifPass() {
         startContentPass()
         startPlacePass()
@@ -403,7 +403,7 @@ final class PhotoLibrary {
         computeMemories()
     }
 
-    /// « Il y a N ans aujourd'hui » : même jour et même mois, années précédentes.
+    /// "N years ago today": same day and month, previous years.
     func computeMemories() {
         let snapshot = photos.map { ($0.id, $0.date) }
         Task {
@@ -459,7 +459,7 @@ final class PhotoLibrary {
         allAlbums = sorted(albumCounts)
     }
 
-    // MARK: Notes et étiquettes
+    // MARK: Ratings and tags
 
     func rating(of photo: Photo) -> Int { metadata[photo.id]?.rating ?? 0 }
     func tags(of photo: Photo) -> [String] { metadata[photo.id]?.tags ?? [] }
@@ -469,13 +469,13 @@ final class PhotoLibrary {
     func rotation(of photo: Photo) -> Int { metadata[photo.id]?.rotation ?? 0 }
     func faces(of photo: Photo) -> [FaceRegion] { metadata[photo.id]?.faces ?? [] }
 
-    /// Zone d'un visage dans l'image orientée selon l'EXIF, sans la rotation d'affichage.
-    /// (Les visages Picasa sont exprimés dans l'image brute du capteur : on les convertit.)
+    /// Face region in the EXIF-oriented image, without the display rotation.
+    /// (Picasa faces are expressed in the raw sensor image: they are converted.)
     func faceRect(_ face: FaceRegion, in photo: Photo) -> CGRect {
         face.raw == true ? FaceGeometry.applyOrientation(face.rect, photo.orientation) : face.rect
     }
 
-    /// Pivote l'affichage d'un quart de tour (+1 horaire, -1 antihoraire). Le fichier n'est pas modifié.
+    /// Rotates the display by a quarter turn (+1 clockwise, -1 counterclockwise). The file is not modified.
     func rotate(_ photos: [Photo], by quarterTurns: Int) {
         for p in photos {
             let r = ((metadata[p.id]?.rotation ?? 0) + quarterTurns) % 4
@@ -532,7 +532,7 @@ final class PhotoLibrary {
         metadataRevision += 1
     }
 
-    /// Enregistrement différé et hors du fil principal : l'interface ne se bloque plus.
+    /// Deferred save, off the main thread: the UI no longer freezes.
     private func scheduleSave() {
         saveTask?.cancel()
         saveTask = Task {
@@ -542,7 +542,7 @@ final class PhotoLibrary {
         }
     }
 
-    /// La photo correspond-elle à tous les mots recherchés (déjà normalisés) ?
+    /// Does the photo match all the search words (already normalized)?
     func matches(_ photo: Photo, tokens: [String]) -> Bool {
         var extra: String?
         return tokens.allSatisfy { token in
@@ -561,7 +561,7 @@ final class PhotoLibrary {
         }
     }
 
-    // MARK: Import Picasa
+    // MARK: Picasa import
 
     private var allFolders: [String] { folders.map(\.path) + roots.map(\.path) }
 
@@ -577,8 +577,8 @@ final class PhotoLibrary {
         save()
     }
 
-    /// Fusionne les données Picasa sans rien écraser : on ajoute personnes, albums, étoiles,
-    /// et on reprend rotation et légende seulement si elles ne sont pas déjà définies.
+    /// Merges Picasa data without overwriting anything: people, albums and stars are added,
+    /// rotation and caption are only taken if not already set.
     func importPicasa() {
         guard !isImportingPicasa else { return }
         isImportingPicasa = true
@@ -590,7 +590,7 @@ final class PhotoLibrary {
                 return (files.count, PicasaImporter.load(files))
             }.value
 
-            // Index insensible à la casse (Picasa a parfois une autre casse que le disque).
+            // Case-insensitive index (Picasa sometimes uses a different case than the disk).
             var lowercased: [String: String] = [:]
             for p in photos { lowercased[p.id.lowercased()] = p.id }
 
@@ -605,7 +605,7 @@ final class PhotoLibrary {
                 if let e = imp.edits, m.edits == nil { m.edits = e; summary.edits += 1 }
                 for name in imp.people where !m.people.contains(name) { m.people.append(name) }
                 for album in imp.albums where !m.albums.contains(album) { m.albums.append(album) }
-                // Remplace les visages d'un import précédent (pas ceux détectés ou nommés dans Albumine).
+                // Replaces faces from a previous import (not those detected or named in Albumine).
                 let fromPicasaOnly = !m.facesAnalyzed && m.faces.allSatisfy { $0.suggestion == nil && $0.score == nil }
                 if m.faces.isEmpty || (fromPicasaOnly && m.faces != imp.faces) { m.faces = imp.faces }
                 m.people.sort { $0.localizedStandardCompare($1) == .orderedAscending }
@@ -627,10 +627,10 @@ final class PhotoLibrary {
         }
     }
 
-    // MARK: Albums virtuels
+    // MARK: Virtual albums
 
-    /// Crée un album (éventuellement avec des photos). Une photo peut être dans plusieurs albums,
-    /// sans être copiée.
+    /// Creates an album (optionally with photos). A photo can be in several albums
+    /// without being copied.
     func createAlbum(_ raw: String, with photos: [Photo] = []) {
         let name = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !name.isEmpty else { return }
@@ -668,7 +668,7 @@ final class PhotoLibrary {
         metadataChanged()
     }
 
-    /// Supprime l'album ; les photos ne sont pas touchées.
+    /// Deletes the album; the photos are not touched.
     func deleteAlbum(_ name: String) {
         albumNames.removeAll { $0 == name }
         for key in metadata.keys where metadata[key]!.albums.contains(name) {
@@ -677,7 +677,7 @@ final class PhotoLibrary {
         metadataChanged()
     }
 
-    // MARK: Doublons
+    // MARK: Duplicates
 
     func findDuplicates() {
         guard !isFindingDuplicates else { return }
@@ -717,7 +717,7 @@ final class PhotoLibrary {
         revision += 1
     }
 
-    /// Ordre de préférence de la copie à garder : la plus annotée, puis la plus ancienne, puis le chemin le plus court.
+    /// Preference order for the copy to keep: most annotated, then oldest, then shortest path.
     private func keeperFirst(_ a: String, _ b: String) -> Bool {
         let ra = metadata[a]?.richness ?? 0, rb = metadata[b]?.richness ?? 0
         if ra != rb { return ra > rb }
@@ -735,9 +735,9 @@ final class PhotoLibrary {
         return (count, bytes)
     }
 
-    /// Met à la corbeille toutes les copies (récupérables depuis la Corbeille du disque).
-    /// Chaque copie est d'abord comparée octet par octet à la photo gardée ; ses notes,
-    /// étiquettes, personnes et albums sont reportés sur la photo gardée.
+    /// Moves all copies to the Trash (recoverable from the drive's Trash).
+    /// Each copy is first compared byte by byte with the kept photo; its ratings,
+    /// tags, people and albums are carried over to the kept photo.
     func trashDuplicateCopies() {
         guard let groups = duplicateGroups, !isTrashing else { return }
         let plan: [(keep: URL, keepID: String, copies: [(id: String, url: URL)])] = groups.compactMap { g in
@@ -776,7 +776,7 @@ final class PhotoLibrary {
         }
     }
 
-    /// Met des photos à la corbeille (récupérables).
+    /// Moves photos to the Trash (recoverable).
     func trash(_ photos: [Photo]) {
         let urls = photos.filter { !$0.offline }.map { ($0.id, $0.url) }
         Task {
@@ -788,7 +788,7 @@ final class PhotoLibrary {
         }
     }
 
-    /// Retire des photos de la liste sans relire le disque (la lecture des EXIF reprend ensuite).
+    /// Removes photos from the list without rescanning (EXIF reading resumes afterwards).
     private func removeFromLibrary(_ ids: Set<String>) {
         guard !ids.isEmpty else { return }
         exifTask?.cancel()
@@ -798,7 +798,7 @@ final class PhotoLibrary {
         if !pending.isEmpty { startExifPass(pending, generation: scanGeneration) }
     }
 
-    // MARK: Visages
+    // MARK: Faces
 
     var isAnalyzingFaces: Bool { faceTotal > 0 && faceDone < faceTotal }
 
@@ -806,8 +806,8 @@ final class PhotoLibrary {
         faceTask?.cancel()
     }
 
-    /// Détecte les visages des photos de la liste qui n'ont pas encore été analysées,
-    /// et propose un nom à partir des visages déjà nommés.
+    /// Detects faces in the photos of the list that have not been analyzed yet,
+    /// and suggests a name based on already named faces.
     func analyzeFaces(in list: [Photo]) {
         guard !isAnalyzingFaces, !facePreparing else { return }
         let targets = list.filter { p in
@@ -821,7 +821,7 @@ final class PhotoLibrary {
         }
         let items = targets.map { (id: $0.id, url: $0.url, rotation: rotation(of: $0)) }
 
-        // Exemples : pour chaque personne, ses plus grands visages nommés.
+        // Examples: for each person, their largest named faces.
         var examples: [String: [(url: URL, rotation: Int, rect: CGRect)]] = [:]
         for (path, m) in metadata where indexByID[path] != nil {
             guard let p = photo(id: path), !p.isVideo else { continue }
@@ -879,7 +879,7 @@ final class PhotoLibrary {
         }
     }
 
-    /// Donne un nom à un visage (et l'ajoute aux exemples de cette personne).
+    /// Names a face (and adds it to that person's examples).
     func nameFace(_ photo: Photo, at index: Int, as raw: String) {
         let name = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !name.isEmpty, var m = metadata[photo.id], m.faces.indices.contains(index) else { return }
@@ -908,7 +908,7 @@ final class PhotoLibrary {
         }
     }
 
-    /// Retire un visage (fausse détection) ; la personne n'est retirée que si plus aucun visage ne la porte.
+    /// Removes a face (false detection); the person is removed only if no face carries that name anymore.
     func removeFace(_ photo: Photo, at index: Int) {
         guard var m = metadata[photo.id], m.faces.indices.contains(index) else { return }
         let removed = m.faces.remove(at: index)
@@ -917,7 +917,7 @@ final class PhotoLibrary {
         metadataChanged()
     }
 
-    // MARK: Analyse du contenu
+    // MARK: Content analysis
 
     func toggleContentPause() {
         contentPaused.toggle()
@@ -929,8 +929,8 @@ final class PhotoLibrary {
         }
     }
 
-    /// Analyse en arrière-plan les photos pas encore analysées (les plus récentes d'abord).
-    /// Remplit au passage le cache de miniatures. Reprend là où elle s'était arrêtée.
+    /// Analyzes not-yet-analyzed photos in the background (newest first).
+    /// Fills the thumbnail cache along the way. Resumes where it left off.
     func startContentPass() {
         guard contentTask == nil, !contentPaused else { return }
         let pending = byDateNewest.filter { p in
@@ -947,7 +947,7 @@ final class PhotoLibrary {
             var start = 0
             var sinceSave = 0
             while start < pending.count {
-                // Priorité aux miniatures affichées et à l'analyse des visages.
+                // Priority to displayed thumbnails and to face analysis.
                 while !(await ImageLoader.limiter.isIdle) || isAnalyzingFaces {
                     try? await Task.sleep(for: .milliseconds(200))
                     if Task.isCancelled { break }
@@ -1003,20 +1003,20 @@ final class PhotoLibrary {
         return RejectReason.reason(for: e)
     }
 
-    /// « Ce n'est pas raté » : la photo n'apparaît plus dans les photos ratées.
+    /// "Ce n'est pas raté" (not a failure): the photo no longer appears among failed photos.
     func markQualityOK(_ photos: [Photo]) {
         for p in photos { metadata[p.id, default: PhotoMetadata()].qualityOK = true }
         metadataChanged()
         recomputeAnalysisDerived()
     }
 
-    /// Score pour choisir la meilleure photo d'une série.
+    /// Score used to pick the best photo of a series.
     func qualityScore(_ id: String) -> Float {
         guard let e = analysis[id] else { return -10 }
         return (e.a ?? 0) * 10 + min((e.b ?? 0) / 500, 2) + Float(metadata[id]?.richness ?? 0)
     }
 
-    // MARK: Photos similaires
+    // MARK: Similar photos
 
     func findSimilar() {
         guard !isFindingSimilar else { return }
@@ -1037,8 +1037,8 @@ final class PhotoLibrary {
 
     var similarExtras: Int { (similarGroups ?? []).reduce(0) { $0 + $1.count - 1 } }
 
-    /// Garde la meilleure photo de chaque série et met les autres à la corbeille
-    /// (notes, personnes et albums reportés sur celle gardée).
+    /// Keeps the best photo of each series and moves the others to the Trash
+    /// (ratings, people and albums are carried over to the kept one).
     func trashSimilarExtras() {
         guard let groups = similarGroups, !isTrashing else { return }
         let plan = groups.compactMap { g -> (keep: String, others: [(String, URL)])? in
@@ -1069,7 +1069,7 @@ final class PhotoLibrary {
         }
     }
 
-    // MARK: Lieux
+    // MARK: Places
 
     func place(of photo: Photo) -> Place? {
         guard let la = photo.latitude, let lo = photo.longitude,
@@ -1077,13 +1077,13 @@ final class PhotoLibrary {
         return p
     }
 
-    /// Nom court utilisé pour les listes (« Avoriaz »).
+    /// Short name used in lists ("Avoriaz").
     func placeName(of photo: Photo) -> String? {
         guard let p = place(of: photo) else { return nil }
         return p.locality ?? p.area ?? p.country
     }
 
-    /// Recherche les noms des zones visitées, les plus photographiées d'abord.
+    /// Looks up the names of visited areas, most photographed first.
     func startPlacePass() {
         guard placeTask == nil else { return }
         var counts: [String: Int] = [:]
@@ -1105,7 +1105,7 @@ final class PhotoLibrary {
                     places[pending[i]] = Place()
                 case .retryLater:
                     failures += 1
-                    if failures > 20 { break } // hors ligne : on reprendra au prochain lancement
+                    if failures > 20 { break } // offline: will resume at next launch
                     try? await Task.sleep(for: .seconds(60))
                     continue
                 }
@@ -1113,7 +1113,7 @@ final class PhotoLibrary {
                 i += 1
                 placeDone = i
                 if i % 25 == 0 { savePlaces(); recomputePlaces() }
-                try? await Task.sleep(for: .milliseconds(1300)) // limite du service Apple
+                try? await Task.sleep(for: .milliseconds(1300)) // Apple service rate limit
             }
             savePlaces()
             recomputePlaces()
@@ -1135,9 +1135,9 @@ final class PhotoLibrary {
         analysisRevision += 1
     }
 
-    // MARK: Disque débranché et surveillance
+    // MARK: Disconnected drive and folder watching
 
-    /// Relecture groupée (plusieurs événements disque en rafale → une seule relecture).
+    /// Coalesced rescan (a burst of disk events → a single rescan).
     func rescanSoon() {
         rescanSoonTask?.cancel()
         rescanSoonTask = Task {
@@ -1155,10 +1155,10 @@ final class PhotoLibrary {
         }
     }
 
-    // MARK: Lieux ajoutés à la main
+    // MARK: Locations added by hand
 
-    /// Définit (ou retire, avec nil) le lieu de photos sans GPS. Le fichier n'est pas modifié
-    /// (le lieu est écrit dans le XMP si l'option est activée).
+    /// Sets (or clears, with nil) the location of photos without GPS. The file is not modified
+    /// (the location is written to the XMP when that option is on).
     func setLocation(_ list: [Photo], latitude: Double?, longitude: Double?) {
         for p in list {
             var m = metadata[p.id] ?? PhotoMetadata()
@@ -1169,13 +1169,13 @@ final class PhotoLibrary {
         applyManualLocations(list.map(\.id))
     }
 
-    /// Photos sans lieu : reprend celui de la photo géolocalisée la plus proche dans le temps (≤ 2 h).
+    /// Photos without a location: take the one of the closest geotagged photo in time (≤ 2 h).
     func fillLocationsFromNeighbors(_ list: [Photo]) {
-        let located = byDateNewest.filter(\.hasLocation).reversed() as [Photo] // ordre chronologique
+        let located = byDateNewest.filter(\.hasLocation).reversed() as [Photo] // chronological order
         let dates = located.map(\.date)
         var changed: [String] = []
         for p in list where !p.hasLocation && !p.offline {
-            // Recherche dichotomique du voisin le plus proche.
+            // Binary search for the closest neighbor.
             var lo = 0, hi = dates.count
             while lo < hi { let mid = (lo + hi) / 2; if dates[mid] < p.date { lo = mid + 1 } else { hi = mid } }
             let candidates = [lo - 1, lo].filter { dates.indices.contains($0) }
@@ -1196,7 +1196,7 @@ final class PhotoLibrary {
         for id in ids {
             guard let i = indexByID[id] else { continue }
             let m = metadata[id]
-            // Retirer un lieu manuel rend sa place au GPS d'origine (relu au prochain scan).
+            // Removing a manual location gives way to the original GPS (re-read at the next scan).
             photos[i].latitude = m?.lat ?? (photos[i].exifChecked ? nil : photos[i].latitude)
             photos[i].longitude = m?.lon ?? (photos[i].exifChecked ? nil : photos[i].longitude)
         }
@@ -1213,7 +1213,7 @@ final class PhotoLibrary {
 
     func hasManualLocation(_ photo: Photo) -> Bool { metadata[photo.id]?.lat != nil }
 
-    // MARK: Retouches
+    // MARK: Edits
 
     func edits(of photo: Photo) -> PhotoEdits? { metadata[photo.id]?.edits }
 
@@ -1224,10 +1224,10 @@ final class PhotoLibrary {
 
     var editedCount: Int { metadata.values.reduce(0) { $0 + (($1.edits?.isIdentity ?? true) ? 0 : 1) } }
 
-    // MARK: Fichiers XMP
+    // MARK: XMP files
 
-    /// Active l'écriture automatique : chaque note, étiquette, personne, légende ou lieu est
-    /// reporté dans un fichier XMP à côté de la photo (fusionné avec celui d'un autre logiciel).
+    /// Turns on automatic writing: every rating, tag, person, caption or location is
+    /// written to an XMP file next to the photo (merged with another application's one).
     func setWriteXMP(_ on: Bool) {
         writeXMP = on
         UserDefaults.standard.set(on, forKey: "writeXMP")
@@ -1250,7 +1250,7 @@ final class PhotoLibrary {
         xmpTask = Task {
             if !immediately { try? await Task.sleep(for: .seconds(2)) }
             guard !Task.isCancelled else { return }
-            // Seulement ce qui a changé depuis la dernière écriture.
+            // Only what changed since the last write.
             var jobs: [(id: String, url: URL, content: XMPSidecar.Content, sig: String)] = []
             for (id, _) in metadata {
                 guard let p = photo(id: id), !p.offline else { continue }
@@ -1277,13 +1277,13 @@ final class PhotoLibrary {
         }
     }
 
-    /// Reprend les informations des fichiers XMP existants (Mylio, Lightroom, digiKam…) :
-    /// notes, mots-clés, personnes et zones des visages, légendes, lieux. Rien n'est écrasé.
+    /// Imports information from existing XMP files (Mylio, Lightroom, digiKam…):
+    /// ratings, keywords, people and face regions, captions, locations. Nothing is overwritten.
     func importSidecars() {
         guard !isImportingXMP else { return }
         isImportingXMP = true
         let paths = sidecarPaths
-        // Correspondance « dossier/nom sans extension » → photos (pour les sidecars « photo.xmp »).
+        // Mapping "folder/name without extension" → photos (for "photo.xmp" sidecars).
         var byStem: [String: [String]] = [:]
         for p in photos where !p.offline { byStem[p.url.deletingPathExtension().path, default: []].append(p.id) }
         let ids = Set(indexByID.keys)
@@ -1337,10 +1337,10 @@ final class PhotoLibrary {
         UserDefaults.standard.set(true, forKey: "xmpImported")
     }
 
-    // MARK: Gestion des personnes
+    // MARK: People management
 
-    /// Renomme une personne partout (photos, visages, exemples de reconnaissance).
-    /// Si le nouveau nom existe déjà, les deux personnes sont fusionnées.
+    /// Renames a person everywhere (photos, faces, recognition examples).
+    /// If the new name already exists, the two people are merged.
     func renamePerson(_ old: String, to raw: String) {
         let new = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !new.isEmpty, new != old else { return }
@@ -1381,7 +1381,7 @@ final class PhotoLibrary {
         save()
     }
 
-    /// Personnes affichées dans la barre latérale (sans les masquées).
+    /// People shown in the sidebar (hidden ones excluded).
     var visiblePeople: [(name: String, count: Int)] { allPeople.filter { !hiddenPeople.contains($0.name) } }
 
     func setCover(_ photo: Photo, faceIndex: Int, for name: String) {
@@ -1389,7 +1389,7 @@ final class PhotoLibrary {
         save()
     }
 
-    /// Visage servant de portrait à une personne : choisi, sinon le plus grand.
+    /// Face used as a person's portrait: the chosen one, otherwise the largest.
     func cover(of name: String) -> (photo: Photo, rect: CGRect, rotation: Int)? {
         var ref: (String, Int)?
         if let c = personCovers[name], let hash = c.lastIndex(of: "#"), let i = Int(c[c.index(after: hash)...]) {
@@ -1401,8 +1401,8 @@ final class PhotoLibrary {
         return (p, faceRect(faces[i], in: p), metadata[id]?.rotation ?? 0)
     }
 
-    /// Doublons probables : même nom à la casse ou aux accents près, ou prénom seul d'un nom complet.
-    /// Chaque paire est orientée de la personne la moins présente vers la plus présente.
+    /// Likely duplicates: same name up to case or accents, or first name only of a full name.
+    /// Each pair points from the person to merge to the person to keep.
     var duplicatePeople: [(from: String, into: String)] {
         let people = allPeople
         func norm(_ s: String) -> String { s.searchFolded.trimmingCharacters(in: .whitespaces) }
@@ -1415,7 +1415,7 @@ final class PhotoLibrary {
                     || (na.split(separator: " ").count == 1 && firstA == firstB)
                     || (nb.split(separator: " ").count == 1 && firstA == firstB)
                 guard similar else { continue }
-                // On garde le nom le plus complet, puis celui avec des majuscules, puis le plus fréquent.
+                // Keep the most complete name, then the one with capitals, then the most frequent.
                 func score(_ p: (name: String, count: Int)) -> (Int, Int, Int) {
                     (p.name.split(separator: " ").count, p.name == p.name.lowercased() ? 0 : 1, p.count)
                 }
@@ -1425,9 +1425,9 @@ final class PhotoLibrary {
         return pairs.map { (from: $0.0, into: $0.1) }
     }
 
-    // MARK: Correction des dates
+    // MARK: Date correction
 
-    /// Décale les dates (ex. appareil mal réglé : +1 h, -1 an…).
+    /// Shifts dates (e.g. wrong camera clock: +1 h, -1 year…).
     func shiftDates(_ list: [Photo], by components: DateComponents) {
         let cal = Calendar.current
         for p in list {
@@ -1437,8 +1437,8 @@ final class PhotoLibrary {
         applyDateOverrides(list.map(\.id))
     }
 
-    /// Donne une date précise (ex. photos scannées). Avec `keepSpacing`, la plus ancienne
-    /// prend cette date et les autres gardent leur écart avec elle.
+    /// Sets an exact date (e.g. scanned photos). With `keepSpacing`, the oldest one
+    /// gets this date and the others keep their offset from it.
     func setDates(_ list: [Photo], to target: Date, keepSpacing: Bool) {
         let earliest = list.map(\.date).min() ?? target
         for p in list {
@@ -1467,11 +1467,11 @@ final class PhotoLibrary {
         metadataChanged()
     }
 
-    // MARK: Intégrité des fichiers
+    // MARK: File integrity
 
     var isCheckingIntegrity: Bool { integrityTotal > 0 && integrityDone < integrityTotal }
 
-    /// Vérifie que chaque fichier est lisible et complet (fichiers vides, tronqués, illisibles).
+    /// Checks that every file is readable and complete (empty, truncated, unreadable files).
     func checkIntegrity() {
         guard integrityTask == nil else { return }
         let items = photos.filter { !$0.offline }
@@ -1520,7 +1520,7 @@ final class PhotoLibrary {
 
     func damageReason(of photo: Photo) -> String? { damaged[photo.id] }
 
-    // MARK: Sauvegarde
+    // MARK: Backup
 
     func chooseBackupDestination() {
         let panel = NSOpenPanel()
@@ -1540,7 +1540,7 @@ final class PhotoLibrary {
         planBackup()
     }
 
-    /// Le dossier de sauvegarde est-il sur le même disque que les photos ?
+    /// Is the backup folder on the same drive as the photos?
     var backupOnSameVolume: Bool {
         guard let dest = backupDestination, let root = roots.first else { return false }
         let a = try? dest.resourceValues(forKeys: [.volumeIdentifierKey]).volumeIdentifier as? NSObject
@@ -1548,7 +1548,7 @@ final class PhotoLibrary {
         return a != nil && a == b
     }
 
-    /// Calcule ce qui manque dans la sauvegarde (fichiers absents ou de taille différente).
+    /// Computes what is missing from the backup (absent files, or different size or date).
     func planBackup() {
         guard let dest = backupDestination, !isPlanningBackup, !isBackingUp else { return }
         isPlanningBackup = true
@@ -1561,7 +1561,7 @@ final class PhotoLibrary {
         }
     }
 
-    /// Photos, vidéos, XMP et fichiers Picasa des dossiers suivis (exclusions respectées).
+    /// Photos, videos, XMP and Picasa files of the watched folders (exclusions respected).
     private func backupSources() -> [(URL, Int64)] {
         var list = photos.filter { !$0.offline }.map { ($0.url, $0.fileSize) }
         for path in sidecarPaths { list.append((URL(fileURLWithPath: path), -1)) }
@@ -1595,7 +1595,7 @@ final class PhotoLibrary {
                 backupFilesDone += batch.count
                 errors += result.1
             }
-            // Données d'Albumine (notes, personnes, albums…) : copiées à chaque sauvegarde.
+            // Albumine's data (ratings, people, albums…): copied at every backup.
             await Task.detached(priority: .utility) { BackupEngine.copyLibraryData(to: dest) }.value
             let cancelled = Task.isCancelled
             isBackingUp = false
@@ -1613,14 +1613,14 @@ final class PhotoLibrary {
 
     func cancelBackup() { backupTask?.cancel() }
 
-    // MARK: Persistance
+    // MARK: Persistence
 
     private func load() {
         guard let data = try? Data(contentsOf: storeURL),
               let store = try? JSONDecoder().decode(Store.self, from: data) else { return }
         roots = store.roots.map { URL(fileURLWithPath: $0, isDirectory: true) }
         metadata = store.metadata
-        // Migration : les visages importés de Picasa avant la v0.3 n'avaient pas l'indicateur « raw ».
+        // Migration: faces imported from Picasa before v0.3 lacked the "raw" flag.
         for key in metadata.keys where !metadata[key]!.facesAnalyzed {
             for i in metadata[key]!.faces.indices where metadata[key]!.faces[i].raw == nil
                 && metadata[key]!.faces[i].suggestion == nil && metadata[key]!.faces[i].score == nil {

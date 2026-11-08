@@ -2,7 +2,7 @@ import SwiftUI
 import AppKit
 import AVKit
 
-/// Visionneuse plein cadre : ← → pour naviguer, 0–5 pour noter, F pour les visages, E pour retoucher, Échap pour fermer.
+/// Full-window viewer: ← → to navigate, 0–5 to rate, F for faces, E to edit, Esc to close.
 struct ViewerView: View {
     @Environment(PhotoLibrary.self) private var library
     let photos: [Photo]
@@ -78,12 +78,12 @@ struct ViewerView: View {
             let rotation = library.rotation(of: photo)
             let edits = library.edits(of: photo)
             if photo.isVideo { image = nil; return }
-            // Affiche d'abord la miniature en cache, puis l'image haute définition.
+            // Show the cached thumbnail first, then the high-resolution image.
             image = ImageLoader.cached(url, maxPixel: ImageLoader.viewerPixels, rotation: rotation, edits: edits)
                 ?? ImageLoader.cached(url, maxPixel: ImageLoader.thumbnailPixels, rotation: rotation, edits: edits)
                 ?? ImageLoader.cached(url, maxPixel: ImageLoader.thumbnailPixels, rotation: rotation)
             if photo.offline {
-                // Disque débranché : seule la miniature en cache est disponible.
+                // Disconnected drive: only the cached thumbnail is available.
                 image = await ImageLoader.load(url, maxPixel: ImageLoader.thumbnailPixels, rotation: rotation, edits: edits)
                 return
             }
@@ -94,7 +94,7 @@ struct ViewerView: View {
         }
     }
 
-    /// Navigation, informations, note (masqués pendant la retouche).
+    /// Navigation, information, rating (hidden while editing).
     @ViewBuilder
     private var chrome: some View {
             HStack {
@@ -197,7 +197,7 @@ struct ViewerView: View {
     }
 }
 
-/// Lecture d'une vidéo dans la visionneuse.
+/// Video playback in the viewer.
 struct VideoPane: View {
     let url: URL
     @Etat private var player: AVPlayer?
@@ -235,7 +235,7 @@ struct VideoPane: View {
     }
 }
 
-/// Cadres des visages par-dessus la photo (coordonnées relatives, rotation d'affichage appliquée).
+/// Face frames over the photo (relative coordinates, display rotation applied).
 struct FaceOverlay: View {
     let faces: [FaceRegion]
     let rotation: Int

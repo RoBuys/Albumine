@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// Sélecteur de note 0–5 étoiles. Cliquer sur l'étoile courante remet la note à 0.
+/// 0–5 star rating picker. Clicking the current star resets the rating to 0.
 struct StarRatingPicker: View {
     let rating: Int
     var size: CGFloat = 16
@@ -23,7 +23,7 @@ struct StarRatingPicker: View {
     }
 }
 
-/// Petit badge d'étoiles affiché sur les miniatures.
+/// Small star badge shown on thumbnails.
 struct StarBadge: View {
     let rating: Int
     var body: some View {
@@ -40,7 +40,7 @@ struct StarBadge: View {
     }
 }
 
-/// Étiquette avec bouton de suppression.
+/// Tag chip with a remove button.
 struct TagChip: View {
     let name: String
     var systemImage: String?
@@ -64,7 +64,7 @@ struct TagChip: View {
     }
 }
 
-/// Disposition en lignes qui passent à la ligne (pour les étiquettes).
+/// Layout that wraps items onto new lines (for tags).
 struct FlowLayout: Layout {
     var spacing: CGFloat = 6
 
@@ -101,6 +101,6 @@ struct FlowLayout: Layout {
     }
 }
 
-/// Alias vers le property wrapper `State` : avec les seuls Command Line Tools,
-/// le macro `@State` du SDK n'a pas de plugin ; l'alias contourne le macro.
+/// Alias to the `State` property wrapper: with Command Line Tools only,
+/// the SDK's `@State` macro has no plugin; the alias bypasses the macro.
 typealias Etat = SwiftUI.State

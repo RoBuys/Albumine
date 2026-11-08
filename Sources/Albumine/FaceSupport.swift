@@ -2,35 +2,35 @@ import CoreGraphics
 import Foundation
 import Vision
 
-/// Détection et reconnaissance des visages avec le framework Vision d'Apple (tout reste sur le Mac).
+/// Face detection and recognition with Apple's Vision framework (everything stays on the Mac).
 ///
-/// Principe : les visages déjà nommés (import Picasa, confirmations) servent d'exemples.
-/// Pour chaque nouveau visage, on calcule une « empreinte » (VNFeaturePrint) et on propose
-/// la personne dont les exemples sont les plus proches. La proposition reste à confirmer.
+/// Principle: already named faces (Picasa import, confirmations) serve as examples.
+/// For each new face we compute a "fingerprint" (VNFeaturePrint) and suggest
+/// the person whose examples are closest. The suggestion must be confirmed.
 enum FaceEngine {
     static let analysisPixels = 1600
-    /// Visages plus petits que cette fraction de la largeur ignorés (trop flous pour être reconnus).
+    /// Faces smaller than this fraction of the width are ignored (too blurry to recognize).
     static let minFaceWidth = 0.035
 
-    /// Image orientée comme à l'écran (EXIF + rotation d'affichage).
+    /// Image oriented as on screen (EXIF + display rotation).
     static func uprightImage(_ url: URL, rotation: Int) -> CGImage? {
         guard let cg = ImageDecoding.decode(url, maxPixel: analysisPixels) else { return nil }
         return ImageDecoding.rotate(cg, rotation)
     }
 
-    /// Rectangles relatifs, origine en haut à gauche, dans l'image fournie.
+    /// Relative rectangles, origin at the top left, in the given image.
     static func detectFaces(in image: CGImage) -> [CGRect] {
         let request = VNDetectFaceRectanglesRequest()
         let handler = VNImageRequestHandler(cgImage: image, options: [:])
         guard (try? handler.perform([request])) != nil else { return [] }
         return (request.results ?? []).map { obs in
-            let b = obs.boundingBox // origine en bas à gauche
+            let b = obs.boundingBox // origin at the bottom left
             return CGRect(x: b.minX, y: 1 - b.maxY, width: b.width, height: b.height)
         }
         .filter { $0.width >= minFaceWidth }
     }
 
-    /// Recadre un visage (avec une marge) dans une image.
+    /// Crops a face (with a margin) out of an image.
     static func crop(_ image: CGImage, face: CGRect, margin: Double = 0.25) -> CGImage? {
         let w = Double(image.width), h = Double(image.height)
         var r = CGRect(x: face.minX * w, y: face.minY * h, width: face.width * w, height: face.height * h)
@@ -48,18 +48,18 @@ enum FaceEngine {
         return request.results?.first
     }
 
-    /// Empreinte d'un visage connu (`rect` : coordonnées stockées, sans rotation d'affichage).
+    /// Fingerprint of a known face (`rect`: stored coordinates, without display rotation).
     static func referencePrint(url: URL, rotation: Int, rect: CGRect) -> VNFeaturePrintObservation? {
         guard let image = uprightImage(url, rotation: rotation),
               let crop = crop(image, face: FaceGeometry.rotate(rect, by: rotation)) else { return nil }
         return featurePrint(of: crop)
     }
 
-    /// Détecte les visages d'une photo et propose un nom pour chacun.
+    /// Detects a photo's faces and suggests a name for each one.
     static func analyze(url: URL, rotation: Int, references: FaceReferences) -> [FaceRegion] {
         guard let image = uprightImage(url, rotation: rotation) else { return [] }
         return detectFaces(in: image).map { upright in
-            // Stockage sans la rotation d'affichage, comme les visages Picasa.
+            // Stored without the display rotation, like Picasa faces.
             let r = FaceGeometry.rotate(upright, by: (4 - rotation) % 4)
             var region = FaceRegion(name: nil, x: r.minX, y: r.minY, w: r.width, h: r.height)
             if let c = crop(image, face: upright), let fp = featurePrint(of: c), let m = references.bestMatch(for: fp) {
@@ -77,11 +77,11 @@ enum FaceEngine {
     }
 }
 
-/// Empreintes de référence par personne, enregistrées dans `faceprints.dat`.
+/// Reference fingerprints per person, saved in `faceprints.dat`.
 final class FaceReferences: @unchecked Sendable {
-    /// Nombre d'exemples gardés par personne.
+    /// Number of examples kept per person.
     static let samplesPerPerson = 24
-    /// En dessous de cette distance, on propose le nom (calibré sur les visages Picasa).
+    /// Below this distance a name is suggested (calibrated on Picasa faces).
     static var threshold = 0.62
 
     private(set) var prints: [String: [VNFeaturePrintObservation]] = [:]
@@ -102,7 +102,7 @@ final class FaceReferences: @unchecked Sendable {
 
     func remove(_ name: String) { lock.withLock { prints[name] = nil } }
 
-    /// Fusionne les exemples d'une personne dans une autre (renommage / fusion).
+    /// Merges one person's examples into another's (rename / merge).
     func rename(_ old: String, to new: String) {
         lock.withLock {
             guard let moved = prints.removeValue(forKey: old) else { return }
@@ -110,12 +110,12 @@ final class FaceReferences: @unchecked Sendable {
         }
     }
 
-    /// Personne la plus proche : (nom, distance), si sous le seuil.
+    /// Closest person: (name, distance), if below the threshold.
     func bestMatch(for print: VNFeaturePrintObservation) -> (name: String, distance: Double)? {
         let snapshot = lock.withLock { prints }
         var best: (String, Double)?
         for (name, samples) in snapshot {
-            // Moyenne des 3 exemples les plus proches : plus robuste qu'un seul.
+            // Mean of the 3 closest examples: more robust than a single one.
             let ds = samples.map { FaceEngine.distance(print, $0) }.sorted().prefix(3)
             guard !ds.isEmpty else { continue }
             let d = ds.reduce(0, +) / Double(ds.count)

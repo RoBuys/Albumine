@@ -1,7 +1,7 @@
 import AppKit
 import SwiftUI
 
-/// Réglages (⌘,) : dossiers analysés, exclusions, options.
+/// Settings (⌘,): scanned folders, exclusions, options.
 struct SettingsView: View {
     var body: some View {
         TabView {
@@ -18,7 +18,7 @@ struct SettingsView: View {
     }
 }
 
-/// Dossiers suivis et sous-dossiers exclus.
+/// Watched folders and excluded subfolders.
 struct FoldersSettings: View {
     @Environment(PhotoLibrary.self) private var library
     @Etat private var rootToRemove: URL?
@@ -142,7 +142,7 @@ struct FoldersSettings: View {
     }
 }
 
-/// Options générales.
+/// General options.
 struct OptionsSettings: View {
     @Environment(PhotoLibrary.self) private var library
 
@@ -189,7 +189,7 @@ struct OptionsSettings: View {
     }
 }
 
-/// Personnes : doublons à fusionner, renommage, personnes masquées.
+/// People: duplicates to merge, renaming, hidden people.
 struct PeopleSettings: View {
     @Environment(PhotoLibrary.self) private var library
     @Etat private var renaming: String?
@@ -261,7 +261,7 @@ struct PeopleSettings: View {
     }
 }
 
-/// Sauvegarde vers un second disque et contrôle d'intégrité.
+/// Backup to a second drive and integrity check.
 struct BackupSettings: View {
     @Environment(PhotoLibrary.self) private var library
 

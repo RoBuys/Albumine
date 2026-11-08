@@ -1,11 +1,11 @@
 import Foundation
 import ImageIO
 
-/// Fichiers XMP « à côté » des photos (sidecars), lus et écrits par Lightroom, digiKam, Mylio…
+/// XMP files "next to" the photos (sidecars), read and written by Lightroom, digiKam, Mylio…
 ///
-/// Écriture : on **fusionne** dans le fichier existant (les données des autres logiciels sont
-/// conservées) et on ne touche qu'aux champs gérés par Albumine. Nouveau fichier : `photo.JPG.xmp`
-/// (pas d'ambiguïté si `photo.JPG` et `photo.MOV` coexistent).
+/// Writing: we **merge** into the existing file (other applications' data is
+/// kept) and only touch the fields Albumine manages. New file: `photo.JPG.xmp`
+/// (no ambiguity when `photo.JPG` and `photo.MOV` coexist).
 enum XMPSidecar {
     static let albumineNS = "https://github.com/RoBuys/Albumine/ns/1.0/"
     static let iptcExtNS = "http://iptc.org/std/Iptc4xmpExt/2008-02-29/"
@@ -17,13 +17,13 @@ enum XMPSidecar {
         var caption = ""
         var latitude: Double?
         var longitude: Double?
-        /// Date de prise de vue corrigée dans Albumine.
+        /// Capture date corrected in Albumine.
         var date: Date?
-        /// Zones nommées (lecture seulement : MWG Regions, centre + taille).
+        /// Named regions (read only: MWG Regions, center + size).
         var regions: [FaceRegion] = []
     }
 
-    /// Sidecar existant : `photo.JPG.xmp`, sinon `photo.xmp` s'il n'existe qu'un fichier de ce nom.
+    /// Existing sidecar: `photo.JPG.xmp`, otherwise `photo.xmp` if only one file has that name.
     static func existing(for url: URL) -> URL? {
         let fm = FileManager.default
         let full = url.appendingPathExtension("xmp")
@@ -39,7 +39,7 @@ enum XMPSidecar {
         return media.count <= 1 ? base : nil
     }
 
-    // MARK: Lecture (Mylio, Lightroom, digiKam…)
+    // MARK: Reading (Mylio, Lightroom, digiKam…)
 
     static func read(_ sidecar: URL) -> Content? {
         guard let data = try? Data(contentsOf: sidecar),
@@ -64,7 +64,7 @@ enum XMPSidecar {
         }
         c.regions = regions(in: String(decoding: data, as: UTF8.self))
         for r in c.regions { if let n = r.name, !c.people.contains(n) { c.people.append(n) } }
-        // Albumine écrit aussi les personnes dans les mots-clés : on ne les compte pas comme étiquettes.
+        // Albumine also writes people into the keywords: they are not counted as tags.
         c.tags.removeAll { c.people.contains($0) }
         return c
     }
@@ -75,7 +75,7 @@ enum XMPSidecar {
         return values.compactMap { CGImageMetadataTagCopyValue($0) as? String }.filter { !$0.isEmpty }
     }
 
-    /// « 45,52.4172N » (format XMP) → 45.8736 ; « -12.5 » accepté aussi.
+    /// "45,52.4172N" (XMP format) → 45.8736; "-12.5" is accepted too.
     static func parseCoordinate(_ s: String) -> Double? {
         let trimmed = s.trimmingCharacters(in: .whitespaces)
         guard let last = trimmed.last else { return nil }
@@ -90,9 +90,9 @@ enum XMPSidecar {
         }
     }
 
-    /// Régions MWG nommées (Mylio, Lightroom, digiKam) : centre (x, y) + taille (w, h), relatives,
-    /// exprimées dans l'image brute (avant orientation EXIF, vérifié sur une photothèque Mylio).
-    /// Gère les deux écritures XML : attributs (`mwg-rs:Name="…"`) et éléments (`<mwg-rs:Name>…</…>`).
+    /// Named MWG regions (Mylio, Lightroom, digiKam): center (x, y) + size (w, h), relative,
+    /// expressed in the raw image (before EXIF orientation, verified on a Mylio library).
+    /// Handles both XML forms: attributes (`mwg-rs:Name="…"`) and elements (`<mwg-rs:Name>…</…>`).
     static func regions(in xml: String) -> [FaceRegion] {
         guard let list = xml.range(of: "mwg-rs:RegionList") else { return [] }
         var out: [FaceRegion] = []
@@ -124,12 +124,12 @@ enum XMPSidecar {
             .replacingOccurrences(of: "&gt;", with: ">")
     }
 
-    // MARK: Écriture (fusion)
+    // MARK: Writing (merge)
 
     enum WriteResult { case written, unchanged }
 
-    /// Écrit (ou met à jour) le sidecar d'une photo. Les champs vides ne sont retirés
-    /// que si Albumine les avait écrits lui-même.
+    /// Writes (or updates) a photo's sidecar. Empty fields are removed only
+    /// if Albumine wrote them itself.
     @discardableResult
     static func write(_ c: Content, for url: URL) throws -> WriteResult {
         let target = existing(for: url) ?? url.appendingPathExtension("xmp")

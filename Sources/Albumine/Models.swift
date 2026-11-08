@@ -1,7 +1,7 @@
 import Foundation
 import ImageIO
 
-/// Une photo trouvée sur le disque. Les fichiers ne sont jamais déplacés ni modifiés.
+/// A photo found on disk. Files are never moved or modified.
 struct Photo: Identifiable, Hashable {
     let url: URL
     let folderPath: String
@@ -11,49 +11,49 @@ struct Photo: Identifiable, Hashable {
     var camera: String?
     var latitude: Double?
     var longitude: Double?
-    /// Orientation EXIF (1–8) du fichier.
+    /// EXIF orientation (1–8) of the file.
     var orientation = 1
     let isVideo: Bool
-    /// Disque débranché : la photo vient de l'index (miniature en cache seulement).
+    /// Disconnected drive: the photo comes from the index (cached thumbnail only).
     var offline = false
-    /// true quand les EXIF ont été lus (ou repris de l'index).
+    /// true once EXIF data has been read (or taken from the index).
     var exifChecked = false
-    /// Nom + dossier, normalisés pour la recherche (calculé une fois au scan).
+    /// Name + folder, normalized for search (computed once during the scan).
     let searchKey: String
 
     var id: String { url.path }
     var name: String { url.lastPathComponent }
     var folderName: String { (folderPath as NSString).lastPathComponent }
-    /// Date de prise de vue si connue, sinon date de modification du fichier.
-    /// Date corrigée par l'utilisateur (prioritaire).
+    /// Capture date if known, otherwise the file's modification date.
+    /// Date corrected by the user (takes precedence).
     var dateOverride: Date?
     var date: Date { dateOverride ?? captureDate ?? modificationDate }
-    /// Date d'origine (fichier), avant correction.
+    /// Original date (from the file), before correction.
     var originalDate: Date { captureDate ?? modificationDate }
     var hasLocation: Bool { latitude != nil && longitude != nil }
 }
 
-/// Données ajoutées par l'utilisateur (ou importées de Picasa), stockées à part : non destructif.
+/// Data added by the user (or imported from Picasa), stored separately: non-destructive.
 struct PhotoMetadata: Codable, Equatable {
     var rating = 0
     var tags: [String] = []
     var people: [String] = []
     var albums: [String] = []
     var caption = ""
-    /// Rotation d'affichage, en quarts de tour dans le sens horaire (0–3).
+    /// Display rotation, in clockwise quarter turns (0–3).
     var rotation = 0
-    /// Zones des visages (coordonnées relatives 0–1), reprises de Picasa.
+    /// Face regions (relative coordinates 0–1), imported from Picasa.
     var faces: [FaceRegion] = []
-    /// La détection des visages a déjà été faite sur cette photo.
+    /// Face detection has already been run on this photo.
     var facesAnalyzed = false
-    /// L'utilisateur a indiqué que la photo n'est pas ratée.
+    /// The user marked the photo as not a failure.
     var qualityOK = false
-    /// Lieu ajouté à la main (photo sans GPS).
+    /// Location added by hand (photo without GPS).
     var lat: Double?
     var lon: Double?
-    /// Retouches non destructives.
+    /// Non-destructive edits.
     var edits: PhotoEdits?
-    /// Date corrigée (secondes depuis 1970).
+    /// Corrected date (seconds since 1970).
     var date: Double?
 
     init() {}
@@ -63,14 +63,14 @@ struct PhotoMetadata: Codable, Equatable {
             && caption.isEmpty && rotation == 0 && faces.isEmpty && !facesAnalyzed && !qualityOK && lat == nil && (edits?.isIdentity ?? true) && date == nil
     }
 
-    /// Nombre d'informations saisies (sert à choisir quelle copie garder parmi des doublons).
+    /// Amount of user annotation (used to pick which copy to keep among duplicates).
     var richness: Int { rating + tags.count + people.count * 2 + albums.count + (caption.isEmpty ? 0 : 1) }
 
     var hasUnnamedFaces: Bool { faces.contains { $0.name == nil } }
 
     private enum CodingKeys: String, CodingKey { case rating, tags, people, albums, caption, rotation, faces, facesAnalyzed, qualityOK, lat, lon, edits, date }
 
-    // Champs facultatifs : les anciens fichiers restent lisibles, les champs vides ne sont pas écrits.
+    // Optional fields: older files stay readable, empty fields are not written.
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         rating = try c.decodeIfPresent(Int.self, forKey: .rating) ?? 0
@@ -105,7 +105,7 @@ struct PhotoMetadata: Codable, Equatable {
         try c.encodeIfPresent(date, forKey: .date)
     }
 
-    /// Fusion d'une copie dans la photo gardée (doublons).
+    /// Merges a copy into the kept photo (duplicates).
     mutating func merge(_ other: PhotoMetadata) {
         rating = max(rating, other.rating)
         for t in other.tags where !tags.contains(t) { tags.append(t) }
@@ -122,37 +122,37 @@ struct PhotoMetadata: Codable, Equatable {
 
 struct FaceRegion: Codable, Equatable {
     var name: String?
-    /// Coordonnées relatives (0–1), origine en haut à gauche, sur l'image sans rotation d'affichage.
+    /// Relative coordinates (0–1), origin at the top left, in the image without display rotation.
     var x: Double
     var y: Double
     var w: Double
     var h: Double
-    /// Nom proposé par la reconnaissance (à confirmer).
+    /// Name suggested by recognition (to be confirmed).
     var suggestion: String?
-    /// Distance à la personne proposée (plus petit = plus sûr).
+    /// Distance to the suggested person (smaller = more confident).
     var score: Double?
-    /// true : coordonnées Picasa, exprimées dans l'image brute (avant orientation EXIF).
+    /// true: Picasa coordinates, expressed in the raw image (before EXIF orientation).
     var raw: Bool?
 
     var rect: CGRect { CGRect(x: x, y: y, width: w, height: h) }
 }
 
 enum FaceGeometry {
-    /// Rectangle de l'image brute → image affichée selon l'orientation EXIF (1–8).
+    /// Rectangle in the raw image → displayed image, according to the EXIF orientation (1–8).
     static func applyOrientation(_ r: CGRect, _ orientation: Int) -> CGRect {
         switch orientation {
-        case 2: return CGRect(x: 1 - r.maxX, y: r.minY, width: r.width, height: r.height)       // miroir horizontal
+        case 2: return CGRect(x: 1 - r.maxX, y: r.minY, width: r.width, height: r.height)       // horizontal mirror
         case 3: return rotate(r, by: 2)
-        case 4: return CGRect(x: r.minX, y: 1 - r.maxY, width: r.width, height: r.height)       // miroir vertical
-        case 5: return CGRect(x: r.minY, y: r.minX, width: r.height, height: r.width)           // transposition
+        case 4: return CGRect(x: r.minX, y: 1 - r.maxY, width: r.width, height: r.height)       // vertical mirror
+        case 5: return CGRect(x: r.minY, y: r.minX, width: r.height, height: r.width)           // transpose
         case 6: return rotate(r, by: 1)
-        case 7: return CGRect(x: 1 - r.maxY, y: 1 - r.maxX, width: r.height, height: r.width)   // transversale
+        case 7: return CGRect(x: 1 - r.maxY, y: 1 - r.maxX, width: r.height, height: r.width)   // transverse
         case 8: return rotate(r, by: 3)
         default: return r
         }
     }
 
-    /// Rectangle relatif après `quarterTurns` quarts de tour horaires de l'image.
+    /// Relative rectangle after `quarterTurns` clockwise quarter turns of the image.
     static func rotate(_ r: CGRect, by quarterTurns: Int) -> CGRect {
         switch ((quarterTurns % 4) + 4) % 4 {
         case 1: return CGRect(x: 1 - r.maxY, y: r.minX, width: r.height, height: r.width)
@@ -198,7 +198,7 @@ enum PhotoGrouping: String, CaseIterable, Identifiable {
     var id: String { rawValue }
 }
 
-/// Section de la grille : une plage contiguë de la liste affichée.
+/// Grid section: a contiguous range of the displayed list.
 struct PhotoGroup: Identifiable {
     let id: String
     let title: String
@@ -214,7 +214,7 @@ enum PhotoSort: String, CaseIterable, Identifiable {
     var id: String { rawValue }
 }
 
-/// Informations EXIF détaillées, lues à la demande pour l'inspecteur.
+/// Detailed EXIF information, read on demand for the inspector.
 struct PhotoInfo {
     var pixelWidth: Int?
     var pixelHeight: Int?
@@ -269,7 +269,7 @@ enum ExifReader {
               var lon = gps?[kCGImagePropertyGPSLongitude as String] as? Double else { return nil }
         if (gps?[kCGImagePropertyGPSLatitudeRef as String] as? String) == "S" { lat = -lat }
         if (gps?[kCGImagePropertyGPSLongitudeRef as String] as? String) == "W" { lon = -lon }
-        // (0,0) = GPS non renseigné sur certains appareils
+        // (0,0) = GPS not set on some cameras
         guard abs(lat) > 0.0001 || abs(lon) > 0.0001, abs(lat) <= 90, abs(lon) <= 180 else { return nil }
         return (lat, lon)
     }
@@ -313,9 +313,9 @@ enum ExifReader {
 
 struct ScanResult {
     var photos: [Photo]
-    /// Indices (dans `photos`) dont les EXIF restent à lire.
+    /// Indices (in `photos`) whose EXIF data is still to be read.
     var pending: [Int]
-    /// Fichiers XMP rencontrés (sidecars d'autres logiciels ou d'Albumine).
+    /// XMP files found (sidecars from other applications or from Albumine).
     var sidecars: [String] = []
 }
 
@@ -329,9 +329,9 @@ enum PhotoScanner {
     ]
     static let allExtensions = extensions.union(videoExtensions)
 
-    /// Phase 1, rapide : liste les fichiers (sans les ouvrir). Les EXIF déjà connus
-    /// sont repris de l'index si le fichier n'a pas changé.
-    /// Le chemin est-il dans un sous-dossier exclu par l'utilisateur ?
+    /// Phase 1, fast: lists the files (without opening them). Already known EXIF data
+    /// is taken from the index if the file has not changed.
+    /// Is the path inside a subfolder excluded by the user?
     static func isExcluded(_ path: String, _ excluded: [String]) -> Bool {
         excluded.contains { path == $0 || path.hasPrefix($0 + "/") }
     }
@@ -384,7 +384,7 @@ enum PhotoScanner {
         return ScanResult(photos: photos, pending: pending, sidecars: sidecars)
     }
 
-    /// Photos d'un disque débranché, reconstituées depuis l'index.
+    /// Photos of a disconnected drive, rebuilt from the index.
     static func offlinePhotos(under root: URL, index: [String: IndexStore.Entry], excluded: [String] = []) -> [Photo] {
         let prefix = root.path.hasSuffix("/") ? root.path : root.path + "/"
         return index.compactMap { path, e -> Photo? in
@@ -405,7 +405,7 @@ enum PhotoScanner {
         }
     }
 
-    /// Phase 2, lente : lit la date de prise de vue et l'appareil, en parallèle.
+    /// Phase 2, slow: reads capture date and camera, in parallel.
     static func readExif(_ urls: [URL]) -> [ExifReader.Quick] {
         var out = [ExifReader.Quick](repeating: ExifReader.Quick(), count: urls.count)
         out.withUnsafeMutableBufferPointer { buffer in
@@ -420,19 +420,19 @@ enum PhotoScanner {
     }
 }
 
-/// Index persistant (chemin → taille, date de modif., EXIF) pour démarrer instantanément.
+/// Persistent index (path → size, modification date, EXIF) for instant startup.
 enum IndexStore {
-    /// Incrémenté quand on lit de nouvelles informations : les entrées plus anciennes sont relues.
+    /// Incremented when new information is read: older entries are read again.
     static let version = 2
 
     struct Entry: Codable {
-        var s: Int64      // taille
-        var m: Double     // date de modification
-        var d: Double?    // date de prise de vue
-        var c: String?    // appareil
+        var s: Int64      // size
+        var m: Double     // modification date
+        var d: Double?    // capture date
+        var c: String?    // camera
         var la: Double?   // latitude
         var lo: Double?   // longitude
-        var o: Int?       // orientation EXIF
+        var o: Int?       // EXIF orientation
         var v: Int?       // version
     }
 
@@ -457,7 +457,7 @@ enum IndexStore {
 }
 
 enum AppPaths {
-    /// ~/Library/Application Support/Albumine (remplaçable via ALBUMINE_HOME pour les tests).
+    /// ~/Library/Application Support/Albumine (overridable with ALBUMINE_HOME for tests).
     static let support: URL = {
         let dir = ProcessInfo.processInfo.environment["ALBUMINE_HOME"].map { URL(fileURLWithPath: $0, isDirectory: true) }
             ?? FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
@@ -484,6 +484,6 @@ enum Debug {
 }
 
 extension String {
-    /// Forme normalisée pour la recherche : minuscules, sans accents.
+    /// Normalized form for search: lowercase, without accents.
     var searchFolded: String { folding(options: [.caseInsensitive, .diacriticInsensitive], locale: nil) }
 }
