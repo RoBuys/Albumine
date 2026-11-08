@@ -105,3 +105,9 @@ Variables utiles au développement : `ALBUMINE_HOME` (autre dossier de données)
 
 Le SDK des Command Line Tools déclare `@State` comme macro sans fournir son plugin ;
 le code utilise donc l'alias `@Etat` (= `SwiftUI.State`). Avec Xcode, `@State` fonctionne aussi.
+
+## Licence
+
+Albumine est distribuée sous licence [MIT](LICENSE) : vous pouvez l'utiliser, la modifier et la
+redistribuer librement, à condition de conserver la mention de copyright et la licence.
+Le logiciel est fourni « tel quel », sans garantie.
