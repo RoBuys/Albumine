@@ -4,7 +4,8 @@ import AppKit
 struct ContentView: View {
     @Environment(PhotoLibrary.self) private var library
 
-    @Etat private var sidebar: SidebarItem? = .all
+    /// ALBUMINE_START_VIEW=map : ouvre directement la carte (tests).
+    @Etat private var sidebar: SidebarItem? = ProcessInfo.processInfo.environment["ALBUMINE_START_VIEW"] == "map" ? .map : .all
     @Etat private var search = ""
     @Etat private var selection: Set<String> = []
     @Etat private var anchor: String?
@@ -45,7 +46,7 @@ struct ContentView: View {
         FilterKey(revision: library.revision,
                   metadataRevision: dependsOnMetadata ? library.metadataRevision : 0,
                   analysisRevision: dependsOnAnalysis ? library.analysisRevision &+ library.similarRevision &* 7919 : 0,
-                  mapTick: sidebar == .map ? library.exifDone / 5000 : 0,
+                  mapTick: sidebar == .map ? library.exifDone / 2000 : 0,
                   sidebar: sidebar, search: search, sort: sort, grouping: grouping, minRating: minRating)
     }
 
