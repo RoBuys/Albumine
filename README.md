@@ -43,7 +43,22 @@ Fonctionne avec les seuls Command Line Tools (Xcode non requis). macOS 14 minimu
   « Ce n'est pas raté » pour les écarter de la liste
 - **Diaporama** plein écran (fondu, léger zoom, musique au choix ; Espace, ← →, Échap)
 - **Export** (taille, qualité, rotation, retrait du GPS) et **Partager** (Mail, Messages, AirDrop…)
-- **Recherche** : nom, dossier, personne, album, étiquette, légende, contenu, lieu, appareil, année (sans accents)
+- **Retouches non destructives** (visionneuse, touche E) : « J'ai de la chance », exposition, contraste,
+  hautes lumières, ombres, saturation, chaleur, filtres (noir et blanc, sépia…), redressement, recadrage
+  (libre, carré, 4:3, 3:2, 16:9…) ; appliquées à l'affichage, au diaporama et à l'export ; retouches Picasa reprises
+- **Souvenirs** « Il y a N ans aujourd'hui » : bandeau, vue dédiée, diaporama
+- **Texte dans les photos** (OCR Vision) : panneaux, documents, captures — cherchable
+- **Frise chronologique** sur le bord de la grille et filtre **Période** (depuis / jusqu'à une année)
+- **Recherche combinée avec suggestions** : « Sacha plage 2012 » ; propositions de personnes, lieux,
+  albums, étiquettes, contenus et années pendant la frappe
+- **Lieu des photos sans GPS** : clic droit › Lieu › Définir le lieu… (carte, recherche d'adresse) ou
+  « d'après les photos prises juste avant ou après » (≤ 2 h)
+- **Fichiers XMP** : import des sidecars existants (Mylio, Lightroom, digiKam : notes, personnes et zones
+  des visages, légendes, lieux) ; écriture des annotations (menu Bibliothèque, option désactivée par défaut),
+  **fusionnée** dans le XMP existant sans perdre les données des autres logiciels
+- **Disque débranché** : la photothèque reste consultable (index + miniatures en cache), rebranchement
+  détecté automatiquement ; **surveillance des dossiers** : nouvelles photos prises en compte toutes seules
+- **Recherche** : nom, dossier, personne, album, étiquette, légende, contenu, texte, lieu, appareil, année (sans accents)
 - **Inspecteur** : EXIF (date, dimensions, appareil, objectif, réglages, GPS → Plans), visages, personnes, albums
 - **Grandes photothèques** : listage immédiat, métadonnées lues en arrière-plan, index persistant,
   cache disque des miniatures, lecture du disque limitée pour garder la grille fluide
@@ -71,6 +86,7 @@ retouches (`filters=`) et dossiers cachés `Originals` (copies avant retouche).
 - `~/Library/Application Support/Albumine/faceprints.dat` : empreintes des visages d'exemple
 - `~/Library/Application Support/Albumine/analysis.json` : analyse du contenu (catégories, qualité, empreintes)
 - `~/Library/Application Support/Albumine/places.json` : noms des lieux
+- `~/Library/Application Support/Albumine/xmp-state.json` : dernier état écrit dans chaque XMP
 - `~/Library/Caches/Albumine/Miniatures` : miniatures (peut être supprimé)
 
 Variables utiles au développement : `ALBUMINE_HOME` (autre dossier de données), `ALBUMINE_DEBUG` (journal sur stderr),

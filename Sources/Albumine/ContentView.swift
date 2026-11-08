@@ -27,6 +27,10 @@ struct ContentView: View {
     @Etat private var confirmTrashSimilar = false
     @Etat private var slideshowPhotos: [Photo]?
     @Etat private var exportPhotos: [Photo]?
+    @Etat private var locationPhotos: [Photo]?
+    @Etat private var yearFrom: Int?
+    @Etat private var yearTo: Int?
+    @Etat private var yearAnchors: [(year: Int, id: String)] = []
     @FocusState private var gridFocused: Bool
 
     /// Tout ce qui influence la liste affichée. Elle n'est recalculée que si ceci change.
@@ -35,6 +39,9 @@ struct ContentView: View {
         var metadataRevision: Int
         var analysisRevision: Int
         var mapTick: Int
+        var memoryCount: Int
+        var yearFrom: Int?
+        var yearTo: Int?
         var sidebar: SidebarItem?
         var search: String
         var sort: PhotoSort
@@ -47,6 +54,8 @@ struct ContentView: View {
                   metadataRevision: dependsOnMetadata ? library.metadataRevision : 0,
                   analysisRevision: dependsOnAnalysis ? library.analysisRevision &+ library.similarRevision &* 7919 : 0,
                   mapTick: sidebar == .map ? library.exifDone / 2000 : 0,
+                  memoryCount: sidebar == .memories ? library.memoryIDs.count : 0,
+                  yearFrom: yearFrom, yearTo: yearTo,
                   sidebar: sidebar, search: search, sort: sort, grouping: grouping, minRating: minRating)
     }
 
@@ -83,7 +92,8 @@ struct ContentView: View {
                     Text(library.notice ?? "")
                 }
         }
-        .searchable(text: $search, placement: .toolbar, prompt: "Nom, dossier, personne, album, appareil, année")
+        .searchable(text: $search, placement: .toolbar, prompt: "Personne, lieu, contenu, année, album…")
+        .searchSuggestions { searchSuggestions }
         .inspector(isPresented: $showInspector) {
             InspectorView(photos: selectedPhotos)
                 .inspectorColumnWidth(min: 260, ideal: 300, max: 400)
@@ -98,6 +108,9 @@ struct ContentView: View {
         }
         .sheet(isPresented: Binding(get: { exportPhotos != nil }, set: { if !$0 { exportPhotos = nil } })) {
             ExportSheet(photos: exportPhotos ?? [])
+        }
+        .sheet(isPresented: Binding(get: { locationPhotos != nil }, set: { if !$0 { locationPhotos = nil } })) {
+            LocationPickerSheet(photos: locationPhotos ?? [])
         }
         .animation(.easeInOut(duration: 0.15), value: viewerList == nil)
         .alert(
@@ -115,6 +128,7 @@ struct ContentView: View {
             guard !Task.isCancelled else { return }
             let start = Date()
             (visible, groups) = computeList()
+            yearAnchors = computeYearAnchors(visible)
             Debug.log("liste : \(visible.count) éléments, \(groups.count) groupes en \(Int(Date().timeIntervalSince(start) * 1000)) ms")
         }
     }
@@ -172,7 +186,10 @@ struct ContentView: View {
             grid
                 .safeAreaInset(edge: .top, spacing: 0) {
                     VStack(spacing: 0) {
+                        offlineBanner
                         picasaBanner
+                        xmpBanner
+                        if item == .all { memoriesBanner }
                         if item == .duplicates { duplicatesBar }
                         if item == .unnamedFaces { facesBar }
                         if item == .similar { similarBar }
@@ -234,6 +251,15 @@ struct ContentView: View {
                 .padding(.horizontal, 14)
                 .padding(.bottom, 14)
             }
+            .overlay(alignment: .trailing) {
+                if yearAnchors.count > 1 {
+                    TimelineBar(anchors: yearAnchors) { id in
+                        withAnimation(.easeInOut(duration: 0.2)) { proxy.scrollTo(id, anchor: .top) }
+                    }
+                    .padding(.trailing, 2)
+                    .padding(.vertical, 40)
+                }
+            }
             .focusable()
             .focusEffectDisabled()
             .focused($gridFocused)
@@ -280,6 +306,7 @@ struct ContentView: View {
             isSelected: selection.contains(photo.id),
             rating: library.rating(of: photo),
             rotation: library.rotation(of: photo),
+            edits: library.edits(of: photo),
             badge: badge(for: photo)
         )
         .id(photo.id)
@@ -335,6 +362,16 @@ struct ContentView: View {
         Button("Diaporama") { startSlideshow(targets.count > 1 ? targets : visible, from: photo) }
         Button("Exporter…") { exportPhotos = targets }
         Divider()
+        Menu("Lieu") {
+            Button("Définir le lieu…") { locationPhotos = targets }
+            Button("D'après les photos prises juste avant ou après") { library.fillLocationsFromNeighbors(targets) }
+            if targets.contains(where: { library.hasManualLocation($0) }) {
+                Button("Retirer le lieu ajouté") { library.setLocation(targets.filter { library.hasManualLocation($0) }, latitude: nil, longitude: nil) }
+            }
+        }
+        if targets.contains(where: { library.edits(of: $0) != nil }) {
+            Button("Annuler les retouches") { targets.forEach { library.setEdits(nil, for: $0) } }
+        }
         Button("Pivoter à droite") { library.rotate(targets, by: 1) }
         Button("Pivoter à gauche") { library.rotate(targets, by: -1) }
         Menu("Note") {
@@ -485,6 +522,132 @@ struct ContentView: View {
         }
     }
 
+    // MARK: Disque débranché, XMP, souvenirs
+
+    @ViewBuilder
+    private var offlineBanner: some View {
+        if !library.offlineRoots.isEmpty {
+            Banner(systemImage: "externaldrive.badge.xmark") {
+                Text("Disque débranché : \(library.offlineRoots.map { $0.pathComponents.count > 2 ? $0.pathComponents[2] : $0.lastPathComponent }.joined(separator: ", "))")
+                    .font(.headline)
+                Text("\(library.offlineCount.formatted()) éléments affichés depuis le cache (miniatures, recherche, carte). Rebranchez le disque pour ouvrir les originaux ; Albumine le détecte automatiquement.")
+                    .font(.caption).foregroundStyle(.secondary)
+            } actions: {
+                EmptyView()
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var xmpBanner: some View {
+        if library.sidecarCount > 0, !library.xmpImported {
+            Banner(systemImage: "doc.badge.gearshape") {
+                Text("\(library.sidecarCount.formatted()) fichiers XMP trouvés (Mylio, Lightroom…)").font(.headline)
+                Text("Notes, personnes et visages, légendes et lieux peuvent être repris. Vos fichiers ne sont pas modifiés.")
+                    .font(.caption).foregroundStyle(.secondary)
+            } actions: {
+                Button("Plus tard") { library.dismissXMPBanner() }
+                Button("Importer") { library.importSidecars() }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(library.isImportingXMP)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var memoriesBanner: some View {
+        if !library.memoryIDs.isEmpty, search.isEmpty {
+            let now = Calendar.current.component(.year, from: Date())
+            Banner(systemImage: "clock.arrow.circlepath") {
+                Text("Ce jour-là : \(library.memoryIDs.count.formatted()) souvenir\(library.memoryIDs.count > 1 ? "s" : "")").font(.headline)
+                Text(library.memoryYears.prefix(6).map { "il y a \(now - $0) ans (\(String($0)))" }.joined(separator: " · "))
+                    .font(.caption).foregroundStyle(.secondary).lineLimit(1)
+            } actions: {
+                Button("Diaporama") {
+                    startSlideshow(library.byDateNewest.filter { library.memoryIDs.contains($0.id) }.reversed())
+                }
+                Button("Voir") { sidebar = .memories }
+                    .buttonStyle(.borderedProminent)
+            }
+        }
+    }
+
+    // MARK: Frise chronologique
+
+    private var availableYears: [Int] {
+        guard let newest = library.byDateNewest.first?.date, let oldest = library.byDateNewest.last?.date else { return [] }
+        let cal = Calendar.current
+        let a = max(cal.component(.year, from: oldest), 1990), b = cal.component(.year, from: newest)
+        return a <= b ? Array((a...b).reversed()) : []
+    }
+
+    private var periodLabel: String {
+        switch (yearFrom, yearTo) {
+        case (nil, nil): return "Période : toutes"
+        case let (f?, t?) where f == t: return "Période : \(String(f))"
+        case let (f?, t?): return "Période : \(String(f))–\(String(t))"
+        case let (f?, nil): return "Période : depuis \(String(f))"
+        case let (nil, t?): return "Période : jusqu'à \(String(t))"
+        }
+    }
+
+    /// Premier élément de chaque année (liste triée par date seulement), par recherche dichotomique.
+    private func computeYearAnchors(_ list: [Photo]) -> [(year: Int, id: String)] {
+        guard sort != .name, grouping != .folder, list.count > 50,
+              ![.duplicates, .similar, .rejects, .unnamedFaces, .map].contains(sidebar ?? .all),
+              let first = list.first?.date, let last = list.last?.date else { return [] }
+        let cal = Calendar.current
+        let ascending = first <= last
+        let y1 = cal.component(.year, from: first), y2 = cal.component(.year, from: last)
+        let years = Array(min(y1, y2)...max(y1, y2))
+        var anchors: [(year: Int, id: String)] = []
+        for y in ascending ? years : years.reversed() {
+            guard let start = cal.date(from: DateComponents(year: y)),
+                  let end = cal.date(from: DateComponents(year: y + 1)) else { continue }
+            // Premier indice dont la date entre dans l'année (dans l'ordre de la liste).
+            var lo = 0, hi = list.count
+            while lo < hi {
+                let mid = (lo + hi) / 2
+                let before = ascending ? list[mid].date < start : list[mid].date >= end
+                if before { lo = mid + 1 } else { hi = mid }
+            }
+            if lo < list.count, list[lo].date >= start, list[lo].date < end { anchors.append((y, list[lo].id)) }
+        }
+        return anchors
+    }
+
+    // MARK: Suggestions de recherche
+
+    @ViewBuilder
+    private var searchSuggestions: some View {
+        let tokens = search.split(separator: " ", omittingEmptySubsequences: false).map(String.init)
+        let last = (tokens.last ?? "").searchFolded
+        if last.count >= 2 {
+            let prefix = tokens.dropLast().joined(separator: " ")
+            let items = suggestions(for: last)
+            ForEach(items, id: \.text) { item in
+                Label(item.text, systemImage: item.icon)
+                    .searchCompletion((prefix.isEmpty ? "" : prefix + " ") + item.text + " ")
+            }
+        }
+    }
+
+    private func suggestions(for token: String) -> [(text: String, icon: String)] {
+        var out: [(String, String)] = []
+        func add(_ values: [String], _ icon: String, limit: Int) {
+            let matches = values.filter { $0.searchFolded.hasPrefix(token) || $0.searchFolded.contains(" " + token) }
+            out += matches.prefix(limit).map { ($0, icon) }
+        }
+        add(library.allPeople.map(\.name), "person.crop.circle", limit: 4)
+        add(library.allPlaces.map(\.name), "mappin.and.ellipse", limit: 3)
+        add(library.allAlbums.map(\.name), "rectangle.stack", limit: 2)
+        add(library.allTags.map(\.name), "tag", limit: 2)
+        add(Array(Set(ContentLabels.names.values)).sorted(), "sparkles", limit: 4)
+        add(availableYears.map(String.init), "calendar", limit: 3)
+        var seen = Set<String>()
+        return out.filter { seen.insert($0.0).inserted }.prefix(10).map { (text: $0.0, icon: $0.1) }
+    }
+
     private func startSlideshow(_ list: [Photo], from photo: Photo? = nil) {
         let images = list.filter { !$0.isVideo }
         guard !images.isEmpty else { return }
@@ -575,6 +738,13 @@ struct ContentView: View {
         case .similar: break
         case .rejects: list = list.filter { library.rejectReason(of: $0) != nil }
         case .place(let name): list = list.filter { library.placeName(of: $0) == name }
+        case .memories: list = list.filter { library.memoryIDs.contains($0.id) }
+        }
+        if yearFrom != nil || yearTo != nil {
+            let cal = Calendar.current
+            let from = yearFrom.flatMap { cal.date(from: DateComponents(year: $0, month: 1, day: 1)) } ?? .distantPast
+            let to = yearTo.flatMap { cal.date(from: DateComponents(year: $0 + 1, month: 1, day: 1)) } ?? .distantFuture
+            list = list.filter { $0.date >= from && $0.date < to }
         }
         if minRating > 0 {
             list = list.filter { library.rating(of: $0) >= minRating }
@@ -587,6 +757,14 @@ struct ContentView: View {
             list.sort { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
         }
         if item == .map { return (list, []) }
+        if item == .memories {
+            let thisYear = Calendar.current.component(.year, from: Date())
+            return group(list) { p in
+                let y = Calendar.current.component(.year, from: p.date)
+                let n = thisYear - y
+                return (String(y), "Il y a \(n) an\(n > 1 ? "s" : "") · \(y)", nil)
+            }
+        }
         if item == .rejects {
             return group(list) { p in
                 let r = library.rejectReason(of: p) ?? .poor
@@ -751,6 +929,7 @@ struct ContentView: View {
         case .similar: return "Photos similaires"
         case .rejects: return "Photos ratées"
         case .place(let name): return name
+        case .memories: return "Souvenirs du jour"
         }
     }
 
@@ -781,6 +960,20 @@ struct ContentView: View {
                 Picker("Trier par", selection: $sort) {
                     ForEach(PhotoSort.allCases) { Text($0.rawValue).tag($0) }
                 }
+                Menu(periodLabel) {
+                    Button("Toutes les années") { yearFrom = nil; yearTo = nil }
+                    Divider()
+                    Menu("Depuis") {
+                        ForEach(availableYears, id: \.self) { y in Button(String(y)) { yearFrom = y; if let t = yearTo, t < y { yearTo = y } } }
+                    }
+                    Menu("Jusqu'à") {
+                        ForEach(availableYears, id: \.self) { y in Button(String(y)) { yearTo = y; if let f = yearFrom, f > y { yearFrom = y } } }
+                    }
+                    Divider()
+                    ForEach(availableYears.prefix(30), id: \.self) { y in
+                        Button("Seulement \(String(y))") { yearFrom = y; yearTo = y }
+                    }
+                }
                 Picker("Note minimale", selection: $minRating) {
                     Text("Toutes les notes").tag(0)
                     ForEach(1...5, id: \.self) { n in
@@ -788,7 +981,7 @@ struct ContentView: View {
                     }
                 }
             } label: {
-                Label("Regrouper, trier et filtrer", systemImage: minRating > 0
+                Label("Regrouper, trier et filtrer", systemImage: minRating > 0 || yearFrom != nil || yearTo != nil
                       ? "line.3.horizontal.decrease.circle.fill" : "line.3.horizontal.decrease.circle")
             }
             .help("Regrouper, trier et filtrer")
@@ -903,11 +1096,12 @@ struct PhotoCell: View {
     let isSelected: Bool
     let rating: Int
     let rotation: Int
+    var edits: PhotoEdits? = nil
     var badge: String? = nil
 
     var body: some View {
         VStack(spacing: 4) {
-            ThumbnailView(url: photo.url, rotation: rotation)
+            ThumbnailView(url: photo.url, rotation: rotation, edits: edits)
                 .frame(width: size, height: size)
                 .overlay(alignment: .bottomLeading) {
                     if rating > 0 { StarBadge(rating: rating).padding(4) }
@@ -922,6 +1116,23 @@ struct PhotoCell: View {
                 }
                 .overlay(alignment: .topTrailing) {
                     if let badge { CellBadge(text: badge).padding(4) }
+                }
+                .overlay(alignment: .topLeading) {
+                    if photo.offline {
+                        Image(systemName: "externaldrive.badge.xmark")
+                            .font(.system(size: 11))
+                            .foregroundStyle(.white, .black.opacity(0.5))
+                            .padding(5)
+                            .help("Disque débranché : miniature en cache")
+                    } else if edits.map({ !$0.isIdentity }) == true {
+                        Image(systemName: "wand.and.stars")
+                            .font(.system(size: 11))
+                            .foregroundStyle(.white)
+                            .padding(4)
+                            .background(.black.opacity(0.45), in: Circle())
+                            .padding(4)
+                            .help("Retouchée")
+                    }
                 }
                 .padding(5)
                 .background(
@@ -955,5 +1166,40 @@ struct CellBadge: View {
             .padding(.horizontal, 5)
             .padding(.vertical, 2)
             .background(Color.green.opacity(0.85), in: Capsule())
+    }
+}
+
+/// Frise des années sur le bord droit de la grille : un clic amène à l'année.
+struct TimelineBar: View {
+    let anchors: [(year: Int, id: String)]
+    let onSelect: (String) -> Void
+    @Etat private var hovering = false
+
+    var body: some View {
+        GeometryReader { geo in
+            let step = max(1, Int(ceil(Double(anchors.count) * 16 / max(geo.size.height, 1))))
+            VStack(spacing: 0) {
+                ForEach(Array(anchors.enumerated()), id: \.offset) { i, a in
+                    if i % step == 0 {
+                        Button { onSelect(a.id) } label: {
+                            Text(String(a.year))
+                                .font(.system(size: 10, weight: .medium))
+                                .monospacedDigit()
+                                .frame(maxHeight: .infinity)
+                                .padding(.horizontal, 4)
+                        }
+                        .buttonStyle(.plain)
+                        .help("Aller en \(String(a.year))")
+                    }
+                }
+            }
+            .frame(maxHeight: .infinity)
+            .padding(.vertical, 4)
+            .background(.regularMaterial.opacity(hovering ? 1 : 0.6), in: Capsule())
+            .opacity(hovering ? 1 : 0.75)
+            .onHover { hovering = $0 }
+            .frame(maxWidth: .infinity, alignment: .trailing)
+        }
+        .frame(width: 40)
     }
 }

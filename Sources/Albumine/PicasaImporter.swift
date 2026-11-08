@@ -33,6 +33,7 @@ enum PicasaImporter {
         var caption: String?
         var albumIDs: [String] = []
         var faces: [Face] = []
+        var edits: PhotoEdits?
     }
 
     struct FolderFile {
@@ -50,6 +51,7 @@ enum PicasaImporter {
         var people: [String] = []
         var albums: [String] = []
         var faces: [FaceRegion] = []
+        var edits: PhotoEdits?
     }
 
     /// Fichiers Picasa présents dans ces dossiers.
@@ -83,6 +85,7 @@ enum PicasaImporter {
         for f in parsed {
             for (fileName, e) in f.entries {
                 var imp = Imported(star: e.star, rotation: e.rotation, caption: e.caption)
+                imp.edits = e.edits
                 imp.albums = e.albumIDs.compactMap { albumNames[$0] }
                 for face in e.faces where face.contact != unknownFace {
                     let name = contacts[face.contact]
@@ -141,12 +144,31 @@ enum PicasaImporter {
                 case "caption": if !value.isEmpty { entry!.caption = value }
                 case "albums": entry!.albumIDs = value.split(separator: ",").map(String.init)
                 case "faces": entry!.faces = parseFaces(value)
+                case "filters": entry!.edits = parseFilters(value)
                 default: break
                 }
             }
         }
         flush()
         return file
+    }
+
+    /// « enhance=1;bw=1; » → retouches équivalentes (les autres filtres Picasa sont ignorés).
+    static func parseFilters(_ value: String) -> PhotoEdits? {
+        var e = PhotoEdits()
+        for part in value.split(separator: ";") {
+            let name = part.split(separator: "=").first.map(String.init) ?? ""
+            switch name {
+            case "enhance", "autolight", "autocolor": e.auto = true
+            case "bw": e.filter = .blackWhite
+            case "sepia": e.filter = .sepia
+            case "warm": e.warmth = 0.4
+            case "saturate": e.saturation = 0.4
+            case "fill": e.shadows = 0.4
+            default: break
+            }
+        }
+        return e.isIdentity ? nil : e
     }
 
     /// « rotate(3) » → 3
@@ -187,6 +209,7 @@ struct PicasaImportSummary: Identifiable {
     var stars = 0
     var rotations = 0
     var captions = 0
+    var edits = 0
     var namedFaces = 0
     var people = Set<String>()
     var albums = Set<String>()
@@ -203,6 +226,7 @@ struct PicasaImportSummary: Identifiable {
         if rotations > 0 { lines.append("• \(rotations.formatted()) rotations") }
         if stars > 0 { lines.append("• \(stars) photos étoilées (→ 5 étoiles)") }
         if captions > 0 { lines.append("• \(captions) légendes") }
+        if edits > 0 { lines.append("• \(edits) retouches (correction auto, noir et blanc, sépia…)") }
         lines.append("\nVos fichiers n'ont pas été modifiés.")
         return lines.joined(separator: "\n")
     }

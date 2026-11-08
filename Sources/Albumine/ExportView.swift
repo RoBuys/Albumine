@@ -38,7 +38,7 @@ struct ExportSheet: View {
                         Text("\(Int(options.quality * 100)) %").monospacedDigit().frame(width: 44)
                     }
                 }
-                Toggle("Appliquer les rotations faites dans Albumine", isOn: $options.applyRotation)
+                Toggle("Appliquer les rotations et retouches faites dans Albumine", isOn: $options.applyRotation)
                 Toggle("Retirer la position GPS", isOn: $options.removeLocation)
             }
             .formStyle(.grouped)
@@ -75,15 +75,15 @@ struct ExportSheet: View {
         panel.prompt = "Exporter ici"
         panel.message = "Choisissez le dossier de destination"
         guard panel.runModal() == .OK, let folder = panel.url else { return }
-        let items = photos.map { ($0, library.rotation(of: $0)) }
+        let items = photos.filter { !$0.offline }.map { ($0, library.rotation(of: $0), library.edits(of: $0)) }
         let opts = options
         running = true
         done = 0
         failures = 0
         Task {
-            for (photo, rotation) in items {
+            for (photo, rotation, edits) in items {
                 let ok = await Task.detached(priority: .userInitiated) {
-                    (try? Exporter.export(photo, rotation: rotation, to: folder, options: opts)) != nil
+                    (try? Exporter.export(photo, rotation: rotation, edits: edits, to: folder, options: opts)) != nil
                 }.value
                 if !ok { failures += 1 }
                 done += 1
@@ -101,10 +101,11 @@ enum Exporter {
     struct Failure: Error {}
 
     @discardableResult
-    static func export(_ photo: Photo, rotation: Int, to folder: URL, options: ExportOptions) throws -> URL {
+    static func export(_ photo: Photo, rotation: Int, edits: PhotoEdits? = nil, to folder: URL, options: ExportOptions) throws -> URL {
         let fm = FileManager.default
+        let edited = options.applyRotation && !(edits?.isIdentity ?? true)
         let needsReencode = !photo.isVideo
-            && (options.maxPixel != nil || (options.applyRotation && rotation != 0) || options.removeLocation
+            && (options.maxPixel != nil || (options.applyRotation && rotation != 0) || edited || options.removeLocation
                 || !["jpg", "jpeg"].contains(photo.url.pathExtension.lowercased()))
         if !needsReencode {
             let dest = unique(folder.appendingPathComponent(photo.name))
@@ -122,7 +123,7 @@ enum Exporter {
             kCGImageSourceThumbnailMaxPixelSize: maxSide,
         ]
         guard var image = CGImageSourceCreateThumbnailAtIndex(source, 0, decodeOptions as CFDictionary) else { throw Failure() }
-        if options.applyRotation { image = ImageDecoding.rotate(image, rotation) }
+        if options.applyRotation { image = EditRenderer.render(ImageDecoding.rotate(image, rotation), edits) }
 
         // Métadonnées d'origine conservées (date, appareil…), orientation remise à 1.
         var meta = props

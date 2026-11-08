@@ -107,7 +107,7 @@ struct SlideshowView: View {
         let photo = photos[i]
         let rotation = library.rotation(of: photo)
         guard let image = await ImageLoader.load(photo.url, maxPixel: ImageLoader.viewerPixels,
-                                                 rotation: rotation, urgent: true),
+                                                 rotation: rotation, edits: library.edits(of: photo), urgent: true),
               !Task.isCancelled else { return }
         zoomed = false
         shown = (i, image)
@@ -115,7 +115,8 @@ struct SlideshowView: View {
         // Prépare la suivante.
         let next = photos[(i + 1) % photos.count]
         let nextRotation = library.rotation(of: next)
-        Task { _ = await ImageLoader.load(next.url, maxPixel: ImageLoader.viewerPixels, rotation: nextRotation, urgent: true) }
+        let nextEdits = library.edits(of: next)
+        Task { _ = await ImageLoader.load(next.url, maxPixel: ImageLoader.viewerPixels, rotation: nextRotation, edits: nextEdits, urgent: true) }
     }
 
     private func chooseMusic() {

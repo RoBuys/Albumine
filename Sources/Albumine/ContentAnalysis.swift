@@ -12,18 +12,27 @@ struct AnalysisEntry: Codable {
     var b: Float?         // netteté (variance du laplacien)
     var y: Float?         // luminosité moyenne (0 … 1)
     var h: UInt64?        // empreinte perceptive (dHash 64 bits)
+    var t: String?        // texte lu dans l'image (OCR)
+    var v: Int?           // version de l'analyse
 }
 
 /// Analyse du contenu, entièrement sur le Mac : catégories, qualité, netteté, luminosité, empreinte.
 enum ContentAnalyzer {
     static let minConfidence: Float = 0.3
+    /// Version 2 : ajout de la lecture du texte.
+    static let version = 2
 
     static func analyze(_ photo: Photo) -> AnalysisEntry {
-        var entry = AnalysisEntry(s: photo.fileSize, m: photo.modificationDate.timeIntervalSince1970)
+        var entry = AnalysisEntry(s: photo.fileSize, m: photo.modificationDate.timeIntervalSince1970, v: version)
         guard !photo.isVideo, let image = ImageLoader.diskThumbnail(photo.url) else { return entry }
 
         let classify = VNClassifyImageRequest()
-        var requests: [VNRequest] = [classify]
+        let text = VNRecognizeTextRequest()
+        text.recognitionLevel = .fast
+        text.recognitionLanguages = ["fr-FR", "en-US"]
+        text.usesLanguageCorrection = false
+        text.minimumTextHeight = 0.02
+        var requests: [VNRequest] = [classify, text]
         var aesthetics: VNRequest?
         if #available(macOS 15.0, *) {
             let r = VNCalculateImageAestheticsScoresRequest()
@@ -38,6 +47,15 @@ enum ContentAnalyzer {
                 .prefix(10)
                 .map(\.identifier)
             entry.l = labels.isEmpty ? nil : Array(labels)
+            // Texte lisible (panneaux, documents, captures…) : mots d'au moins 3 lettres, sûrs.
+            let words = (text.results ?? [])
+                .compactMap { $0.topCandidates(1).first }
+                .filter { $0.confidence >= 0.4 }
+                .map(\.string)
+                .joined(separator: " ")
+                .split(separator: " ")
+                .filter { $0.count >= 3 && $0.contains(where: \.isLetter) }
+            if !words.isEmpty { entry.t = String(words.joined(separator: " ").prefix(500)) }
             if #available(macOS 15.0, *), let obs = (aesthetics as? VNCalculateImageAestheticsScoresRequest)?.results?.first {
                 entry.a = obs.overallScore
                 entry.u = obs.isUtility ? true : nil

@@ -18,6 +18,11 @@ struct SidebarView: View {
                 Label("Toutes les photos", systemImage: "photo.on.rectangle")
                     .badge(library.photoCount)
                     .tag(SidebarItem.all)
+                if !library.memoryIDs.isEmpty {
+                    Label("Souvenirs du jour", systemImage: "clock.arrow.circlepath")
+                        .badge(library.memoryIDs.count)
+                        .tag(SidebarItem.memories)
+                }
                 Label("Étoilées", systemImage: "star")
                     .badge(library.starredCount)
                     .tag(SidebarItem.starred)
@@ -192,6 +197,16 @@ struct SidebarView: View {
                 progressRow("Lieux \(library.placeDone.formatted()) / \(library.placeTotal.formatted())",
                             value: Double(library.placeDone) / Double(max(library.placeTotal, 1)))
                     .help("Recherche des noms de lieux (service Apple, une zone à la fois).")
+            }
+            if library.isWritingXMP {
+                progressRow("Écriture des fichiers XMP…", value: nil)
+            }
+            if library.isImportingXMP {
+                progressRow("Import des fichiers XMP…", value: nil)
+            }
+            if !library.offlineRoots.isEmpty {
+                Label("Disque débranché (lecture seule)", systemImage: "externaldrive.badge.xmark")
+                    .font(.caption2).foregroundStyle(.orange)
             }
             if library.isTrashing {
                 progressRow("Mise à la corbeille…", value: nil)

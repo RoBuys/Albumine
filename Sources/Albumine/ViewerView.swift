@@ -2,7 +2,7 @@ import SwiftUI
 import AppKit
 import AVKit
 
-/// Visionneuse plein cadre : ← → pour naviguer, 0–5 pour noter, F pour les visages, Échap pour fermer.
+/// Visionneuse plein cadre : ← → pour naviguer, 0–5 pour noter, F pour les visages, E pour retoucher, Échap pour fermer.
 struct ViewerView: View {
     @Environment(PhotoLibrary.self) private var library
     let photos: [Photo]
@@ -11,6 +11,7 @@ struct ViewerView: View {
 
     @Etat private var image: NSImage?
     @Etat private var showFaces = false
+    @Etat private var editing = false
     @FocusState private var focused: Bool
 
     private var photo: Photo { photos[index] }
@@ -28,7 +29,7 @@ struct ViewerView: View {
                     .resizable()
                     .scaledToFit()
                     .overlay {
-                        if showFaces {
+                        if showFaces, !(library.edits(of: photo).map { $0.hasCrop || $0.straighten != 0 } ?? false) {
                             FaceOverlay(faces: library.faces(of: photo).map { face in
                                 var f = face
                                 let r = library.faceRect(face, in: photo)
@@ -43,6 +44,59 @@ struct ViewerView: View {
                 ProgressView().controlSize(.large)
             }
 
+            if !editing { chrome }
+        }
+        .overlay {
+            if editing {
+                EditorView(photo: photo) { editing = false; focused = true }
+            }
+        }
+        .focusable()
+        .focusEffectDisabled()
+        .focused($focused)
+        .onAppear { focused = true }
+        .onKeyPress(.leftArrow) { editing ? .ignored : { go(-1); return .handled }() }
+        .onKeyPress(.rightArrow) { editing ? .ignored : { go(1); return .handled }() }
+        .onKeyPress(.space) { editing ? .ignored : { go(1); return .handled }() }
+        .onKeyPress(characters: CharacterSet(charactersIn: "fF")) { _ in
+            guard !editing else { return .ignored }
+            showFaces.toggle()
+            return .handled
+        }
+        .onKeyPress(characters: CharacterSet(charactersIn: "eE")) { _ in
+            guard !editing, !photo.isVideo, !photo.offline else { return .ignored }
+            editing = true
+            return .handled
+        }
+        .onKeyPress(characters: CharacterSet(charactersIn: "012345")) { press in
+            guard !editing, let n = Int(press.characters) else { return .ignored }
+            library.setRating(n, for: [photo])
+            return .handled
+        }
+        .task(id: "\(library.rotation(of: photo))|\(library.edits(of: photo)?.cacheKey ?? "")|\(photo.id)") {
+            let url = photo.url
+            let rotation = library.rotation(of: photo)
+            let edits = library.edits(of: photo)
+            if photo.isVideo { image = nil; return }
+            // Affiche d'abord la miniature en cache, puis l'image haute définition.
+            image = ImageLoader.cached(url, maxPixel: ImageLoader.viewerPixels, rotation: rotation, edits: edits)
+                ?? ImageLoader.cached(url, maxPixel: ImageLoader.thumbnailPixels, rotation: rotation, edits: edits)
+                ?? ImageLoader.cached(url, maxPixel: ImageLoader.thumbnailPixels, rotation: rotation)
+            if photo.offline {
+                // Disque débranché : seule la miniature en cache est disponible.
+                image = await ImageLoader.load(url, maxPixel: ImageLoader.thumbnailPixels, rotation: rotation, edits: edits)
+                return
+            }
+            let full = await ImageLoader.load(url, maxPixel: ImageLoader.viewerPixels, rotation: rotation, edits: edits, urgent: true)
+            guard !Task.isCancelled else { return }
+            if let full { image = full }
+            preloadNeighbours()
+        }
+    }
+
+    /// Navigation, informations, note (masqués pendant la retouche).
+    @ViewBuilder
+    private var chrome: some View {
             HStack {
                 navButton("chevron.left", enabled: index > 0) { go(-1) }
                 Spacer()
@@ -67,6 +121,21 @@ struct ViewerView: View {
                         }
                     }
                     Spacer()
+                    if photo.offline {
+                        Label("Disque débranché", systemImage: "externaldrive.badge.xmark")
+                            .font(.caption)
+                            .foregroundStyle(.orange)
+                            .padding(.trailing, 8)
+                    }
+                    if !photo.isVideo, !photo.offline {
+                        Button { editing = true } label: {
+                            Image(systemName: library.edits(of: photo) == nil ? "wand.and.stars.inverse" : "wand.and.stars")
+                                .font(.title3)
+                        }
+                        .buttonStyle(.plain)
+                        .help("Retoucher (E)")
+                        .padding(.trailing, 8)
+                    }
                     if !photo.isVideo {
                         Button { showFaces.toggle() } label: {
                             Image(systemName: showFaces ? "person.crop.square.fill" : "person.crop.square")
@@ -97,35 +166,6 @@ struct ViewerView: View {
             }
             .foregroundStyle(.white)
             .padding(18)
-        }
-        .focusable()
-        .focusEffectDisabled()
-        .focused($focused)
-        .onAppear { focused = true }
-        .onKeyPress(.leftArrow) { go(-1); return .handled }
-        .onKeyPress(.rightArrow) { go(1); return .handled }
-        .onKeyPress(.space) { go(1); return .handled }
-        .onKeyPress(characters: CharacterSet(charactersIn: "fF")) { _ in
-            showFaces.toggle()
-            return .handled
-        }
-        .onKeyPress(characters: CharacterSet(charactersIn: "012345")) { press in
-            guard let n = Int(press.characters) else { return .ignored }
-            library.setRating(n, for: [photo])
-            return .handled
-        }
-        .task(id: "\(library.rotation(of: photo))|\(photo.id)") {
-            let url = photo.url
-            let rotation = library.rotation(of: photo)
-            if photo.isVideo { image = nil; return }
-            // Affiche d'abord la miniature en cache, puis l'image haute définition.
-            image = ImageLoader.cached(url, maxPixel: ImageLoader.viewerPixels, rotation: rotation)
-                ?? ImageLoader.cached(url, maxPixel: ImageLoader.thumbnailPixels, rotation: rotation)
-            let full = await ImageLoader.load(url, maxPixel: ImageLoader.viewerPixels, rotation: rotation, urgent: true)
-            guard !Task.isCancelled else { return }
-            if let full { image = full }
-            preloadNeighbours()
-        }
     }
 
     private func go(_ delta: Int) {
@@ -136,9 +176,11 @@ struct ViewerView: View {
 
     private func preloadNeighbours() {
         for i in [index + 1, index - 1] where photos.indices.contains(i) {
+            guard !photos[i].offline else { continue }
             let url = photos[i].url
             let rotation = library.rotation(of: photos[i])
-            Task { _ = await ImageLoader.load(url, maxPixel: ImageLoader.viewerPixels, rotation: rotation, urgent: true) }
+            let edits = library.edits(of: photos[i])
+            Task { _ = await ImageLoader.load(url, maxPixel: ImageLoader.viewerPixels, rotation: rotation, edits: edits, urgent: true) }
         }
     }
 

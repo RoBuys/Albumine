@@ -45,7 +45,7 @@ struct InspectorView: View {
     @ViewBuilder
     private var header: some View {
         if photos.count == 1, let photo = photos.first {
-            ThumbnailView(url: photo.url, rotation: library.rotation(of: photo))
+            ThumbnailView(url: photo.url, rotation: library.rotation(of: photo), edits: library.edits(of: photo))
                 .frame(maxWidth: .infinity, minHeight: 120, maxHeight: 220)
             Text(photo.name).font(.headline).textSelection(.enabled)
         } else {
@@ -223,7 +223,7 @@ struct InspectorView: View {
     private func contentSection(_ photo: Photo) -> some View {
         let labels = library.labels(of: photo)
         let reason = library.rejectReason(of: photo)
-        if !labels.isEmpty || reason != nil {
+        if !labels.isEmpty || reason != nil || library.recognizedText(of: photo) != nil {
             VStack(alignment: .leading, spacing: 8) {
                 sectionTitle("Contenu reconnu")
                 if !labels.isEmpty {
@@ -235,6 +235,12 @@ struct InspectorView: View {
                                 .padding(.vertical, 2)
                                 .background(.quaternary, in: Capsule())
                         }
+                    }
+                }
+                if let text = library.recognizedText(of: photo) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Texte détecté").font(.caption).foregroundStyle(.secondary)
+                        Text(text).font(.caption).lineLimit(4).textSelection(.enabled)
                     }
                 }
                 if let reason {
@@ -264,7 +270,11 @@ struct InspectorView: View {
                 if let camera = info?.camera { row("Appareil", camera) }
                 if let lens = info?.lens { row("Objectif", lens) }
                 if let settings = shootingSettings { row("Réglages", settings) }
-                if let place = library.place(of: photo) { row("Lieu", place.label) }
+                if let place = library.place(of: photo) {
+                    row("Lieu", place.label + (library.hasManualLocation(photo) ? " (ajouté)" : ""))
+                } else if library.hasManualLocation(photo) {
+                    row("Lieu", "ajouté à la main")
+                }
                 row("Dossier", photo.folderName)
             }
             .font(.callout)

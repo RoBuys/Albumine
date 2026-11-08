@@ -65,6 +65,10 @@ final class PhotoLibrary {
     private(set) var rejectCount = 0
     @ObservationIgnored private var contentTask: Task<Void, Never>?
 
+    // Souvenirs : photos prises un même jour, les années précédentes
+    private(set) var memoryIDs: Set<String> = []
+    private(set) var memoryYears: [Int] = []
+
     // Photos similaires (calculées à la demande)
     private(set) var similarGroups: [[String]]?
     private(set) var similarBest: Set<String> = []
@@ -77,6 +81,24 @@ final class PhotoLibrary {
     private(set) var placeDone = 0
     private(set) var placeTotal = 0
     @ObservationIgnored private var placeTask: Task<Void, Never>?
+
+    // Disque débranché, surveillance des dossiers
+    private(set) var offlineRoots: [URL] = []
+    private(set) var offlineCount = 0
+    @ObservationIgnored private var watcher: FolderWatcher?
+    @ObservationIgnored private var volumeObservers: [NSObjectProtocol] = []
+    @ObservationIgnored private var rescanSoonTask: Task<Void, Never>?
+
+    // Fichiers XMP
+    private(set) var sidecarCount = 0
+    @ObservationIgnored private var sidecarPaths: [String] = []
+    private(set) var writeXMP = UserDefaults.standard.bool(forKey: "writeXMP")
+    private(set) var xmpImported = UserDefaults.standard.bool(forKey: "xmpImported")
+    private(set) var isWritingXMP = false
+    private(set) var isImportingXMP = false
+    @ObservationIgnored private var xmpState: [String: String] = [:]
+    @ObservationIgnored private var xmpTask: Task<Void, Never>?
+    @ObservationIgnored private let xmpStateURL = AppPaths.support.appendingPathComponent("xmp-state.json")
 
     // Import Picasa
     private(set) var picasaFilesFound = 0
@@ -100,6 +122,15 @@ final class PhotoLibrary {
 
     init() {
         load()
+        if let data = try? Data(contentsOf: xmpStateURL),
+           let state = try? JSONDecoder().decode([String: String].self, from: data) { xmpState = state }
+        // Branchement / débranchement d'un disque : on relit les dossiers.
+        let nc = NSWorkspace.shared.notificationCenter
+        for name in [NSWorkspace.didMountNotification, NSWorkspace.didUnmountNotification] {
+            volumeObservers.append(nc.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { self?.rescanSoon() }
+            })
+        }
         Task {
             let (a, p) = await Task.detached(priority: .userInitiated) { (AnalysisStore.load(), PlaceStore.load()) }.value
             analysis = a
@@ -167,13 +198,23 @@ final class PhotoLibrary {
         exifDone = 0
         exifTotal = 0
         isScanning = true
+        let reachable = roots.filter { FileManager.default.fileExists(atPath: $0.path) }
+        let missing = roots.filter { r in !reachable.contains(where: { $0.path == r.path }) }
         Task {
             let start = Date()
             let result = await Task.detached(priority: .userInitiated) { () -> ScanResult in
-                PhotoScanner.scan(roots, index: IndexStore.load())
+                let index = IndexStore.load()
+                var result = PhotoScanner.scan(reachable, index: index)
+                // Disque débranché : on garde ses photos, d'après l'index (miniatures en cache).
+                for root in missing { result.photos += PhotoScanner.offlinePhotos(under: root, index: index) }
+                return result
             }.value
             guard generation == scanGeneration else { return }
-            Debug.log("scan: \(result.photos.count) photos, \(result.pending.count) EXIF à lire, \(Date().timeIntervalSince(start)) s")
+            offlineRoots = missing
+            sidecarPaths = result.sidecars
+            sidecarCount = result.sidecars.count
+            startWatching(reachable)
+            Debug.log("scan: \(result.photos.count) photos (dont \(result.photos.filter(\.offline).count) hors ligne), \(result.pending.count) EXIF à lire, \(result.sidecars.count) XMP, \(Date().timeIntervalSince(start)) s")
             setPhotos(result.photos)
             isScanning = false
             if ProcessInfo.processInfo.environment["ALBUMINE_AUTOIMPORT"] != nil { importPicasa() } // tests
@@ -186,7 +227,17 @@ final class PhotoLibrary {
         }
     }
 
-    private func setPhotos(_ newPhotos: [Photo]) {
+    private func setPhotos(_ incoming: [Photo]) {
+        var newPhotos = incoming
+        // Lieux ajoutés à la main.
+        for i in newPhotos.indices {
+            if let m = metadata[newPhotos[i].id], let la = m.lat, let lo = m.lon {
+                newPhotos[i].latitude = la
+                newPhotos[i].longitude = lo
+            }
+        }
+        ImageLoader.registerSignatures(newPhotos)
+        offlineCount = newPhotos.reduce(0) { $0 + ($1.offline ? 1 : 0) }
         photos = newPhotos
         photoCount = newPhotos.count
         var map: [String: Int] = [:]
@@ -226,8 +277,9 @@ final class PhotoLibrary {
                     photos[i].captureDate = r.date
                     photos[i].camera = r.camera
                     photos[i].orientation = r.orientation
-                    photos[i].latitude = r.latitude
-                    photos[i].longitude = r.longitude
+                    let manual = metadata[photos[i].id]
+                    photos[i].latitude = manual?.lat ?? r.latitude
+                    photos[i].longitude = manual?.lon ?? r.longitude
                     photos[i].exifChecked = true
                 }
                 exifDone = end
@@ -272,6 +324,29 @@ final class PhotoLibrary {
 
     private func resort() {
         byDateNewest = photos.sorted { $0.date > $1.date }
+        computeMemories()
+    }
+
+    /// « Il y a N ans aujourd'hui » : même jour et même mois, années précédentes.
+    func computeMemories() {
+        let snapshot = photos.map { ($0.id, $0.date) }
+        Task {
+            let (ids, years) = await Task.detached(priority: .utility) { () -> (Set<String>, [Int]) in
+                let cal = Calendar.current
+                let today = cal.dateComponents([.year, .month, .day], from: Date())
+                var ids = Set<String>(), years = Set<Int>()
+                for (id, date) in snapshot {
+                    let c = cal.dateComponents([.year, .month, .day], from: date)
+                    if c.month == today.month, c.day == today.day, let y = c.year, y < (today.year ?? 0) {
+                        ids.insert(id)
+                        years.insert(y)
+                    }
+                }
+                return (ids, years.sorted(by: >))
+            }.value
+            memoryIDs = ids
+            memoryYears = years
+        }
     }
 
     private func recomputeCounts() {
@@ -371,6 +446,7 @@ final class PhotoLibrary {
 
     private func metadataChanged() {
         scheduleSave()
+        if writeXMP { scheduleXMPWrite() }
         recomputeMetadataDerived()
         metadataRevision += 1
     }
@@ -396,6 +472,7 @@ final class PhotoLibrary {
                 var text = ([photo.camera ?? "", year, m?.caption ?? ""] + (m?.tags ?? []) + (m?.people ?? []) + (m?.albums ?? []))
                     .joined(separator: " ").searchFolded
                 for label in analysis[photo.id]?.l ?? [] { text += " " + ContentLabels.searchText(label) }
+                if let t = analysis[photo.id]?.t { text += " " + t.searchFolded }
                 if let place = place(of: photo) { text += " " + place.searchText }
                 extra = text
             }
@@ -444,6 +521,7 @@ final class PhotoLibrary {
                 if imp.star, m.rating < 5 { m.rating = 5; summary.stars += 1 }
                 if imp.rotation != 0, m.rotation == 0 { m.rotation = imp.rotation; summary.rotations += 1 }
                 if let c = imp.caption, m.caption.isEmpty { m.caption = c; summary.captions += 1 }
+                if let e = imp.edits, m.edits == nil { m.edits = e; summary.edits += 1 }
                 for name in imp.people where !m.people.contains(name) { m.people.append(name) }
                 for album in imp.albums where !m.albums.contains(album) { m.albums.append(album) }
                 // Remplace les visages d'un import précédent (pas ceux détectés ou nommés dans Albumine).
@@ -522,7 +600,7 @@ final class PhotoLibrary {
 
     func findDuplicates() {
         guard !isFindingDuplicates else { return }
-        let candidates = DuplicateFinder.sameSizeCandidates(photos)
+        let candidates = DuplicateFinder.sameSizeCandidates(photos.filter { !$0.offline })
         let items = candidates.map { (id: $0.id, url: $0.url, size: $0.fileSize) }
         let generation = scanGeneration
         isFindingDuplicates = true
@@ -619,7 +697,7 @@ final class PhotoLibrary {
 
     /// Met des photos à la corbeille (récupérables).
     func trash(_ photos: [Photo]) {
-        let urls = photos.map { ($0.id, $0.url) }
+        let urls = photos.filter { !$0.offline }.map { ($0.id, $0.url) }
         Task {
             let done = await Task.detached { urls.filter { (try? FileManager.default.trashItem(at: $0.1, resultingItemURL: nil)) != nil }.map(\.0) }.value
             for id in done { metadata[id] = nil }
@@ -652,7 +730,7 @@ final class PhotoLibrary {
     func analyzeFaces(in list: [Photo]) {
         guard !isAnalyzingFaces, !facePreparing else { return }
         let targets = list.filter { p in
-            guard !p.isVideo else { return false }
+            guard !p.isVideo, !p.offline else { return false }
             let m = metadata[p.id]
             return !(m?.facesAnalyzed ?? false) && (m?.faces.isEmpty ?? true)
         }
@@ -775,8 +853,10 @@ final class PhotoLibrary {
     func startContentPass() {
         guard contentTask == nil, !contentPaused else { return }
         let pending = byDateNewest.filter { p in
+            guard !p.offline else { return false }
             guard let e = analysis[p.id] else { return true }
             return e.s != p.fileSize || abs(e.m - p.modificationDate.timeIntervalSince1970) >= 1
+                || (e.v ?? 1) < ContentAnalyzer.version
         }
         guard !pending.isEmpty else { return }
         contentTotal = pending.count
@@ -835,6 +915,7 @@ final class PhotoLibrary {
     }
 
     func labels(of photo: Photo) -> [String] { analysis[photo.id]?.l ?? [] }
+    func recognizedText(of photo: Photo) -> String? { analysis[photo.id]?.t }
 
     func rejectReason(of photo: Photo) -> RejectReason? {
         guard !(metadata[photo.id]?.qualityOK ?? false), let e = analysis[photo.id] else { return nil }
@@ -971,6 +1052,207 @@ final class PhotoLibrary {
         for p in photos { if let n = placeName(of: p) { counts[n, default: 0] += 1 } }
         allPlaces = counts.map { (name: $0.key, count: $0.value) }.sorted { $0.count > $1.count }
         analysisRevision += 1
+    }
+
+    // MARK: Disque débranché et surveillance
+
+    /// Relecture groupée (plusieurs événements disque en rafale → une seule relecture).
+    func rescanSoon() {
+        rescanSoonTask?.cancel()
+        rescanSoonTask = Task {
+            try? await Task.sleep(for: .seconds(4))
+            guard !Task.isCancelled else { return }
+            while isScanning || isTrashing { try? await Task.sleep(for: .seconds(2)) }
+            rescan()
+        }
+    }
+
+    private func startWatching(_ reachable: [URL]) {
+        let paths = reachable.map(\.path)
+        watcher = FolderWatcher(paths: paths) { [weak self] in
+            MainActor.assumeIsolated { self?.rescanSoon() }
+        }
+    }
+
+    // MARK: Lieux ajoutés à la main
+
+    /// Définit (ou retire, avec nil) le lieu de photos sans GPS. Le fichier n'est pas modifié
+    /// (le lieu est écrit dans le XMP si l'option est activée).
+    func setLocation(_ list: [Photo], latitude: Double?, longitude: Double?) {
+        for p in list {
+            var m = metadata[p.id] ?? PhotoMetadata()
+            m.lat = latitude
+            m.lon = longitude
+            metadata[p.id] = m
+        }
+        applyManualLocations(list.map(\.id))
+    }
+
+    /// Photos sans lieu : reprend celui de la photo géolocalisée la plus proche dans le temps (≤ 2 h).
+    func fillLocationsFromNeighbors(_ list: [Photo]) {
+        let located = byDateNewest.filter(\.hasLocation).reversed() as [Photo] // ordre chronologique
+        let dates = located.map(\.date)
+        var changed: [String] = []
+        for p in list where !p.hasLocation && !p.offline {
+            // Recherche dichotomique du voisin le plus proche.
+            var lo = 0, hi = dates.count
+            while lo < hi { let mid = (lo + hi) / 2; if dates[mid] < p.date { lo = mid + 1 } else { hi = mid } }
+            let candidates = [lo - 1, lo].filter { dates.indices.contains($0) }
+            guard let best = candidates.min(by: { abs(dates[$0].timeIntervalSince(p.date)) < abs(dates[$1].timeIntervalSince(p.date)) }),
+                  abs(dates[best].timeIntervalSince(p.date)) <= 2 * 3600,
+                  let la = located[best].latitude, let lon = located[best].longitude else { continue }
+            metadata[p.id, default: PhotoMetadata()].lat = la
+            metadata[p.id, default: PhotoMetadata()].lon = lon
+            changed.append(p.id)
+        }
+        applyManualLocations(changed)
+        let skipped = list.filter { !$0.hasLocation }.count - changed.count
+        notice = "\(changed.count) photo(s) localisée(s) d'après les photos prises à moins de 2 h d'intervalle."
+            + (skipped > 0 ? " \(skipped) sans voisine géolocalisée." : "")
+    }
+
+    private func applyManualLocations(_ ids: [String]) {
+        for id in ids {
+            guard let i = indexByID[id] else { continue }
+            let m = metadata[id]
+            // Retirer un lieu manuel rend sa place au GPS d'origine (relu au prochain scan).
+            photos[i].latitude = m?.lat ?? (photos[i].exifChecked ? nil : photos[i].latitude)
+            photos[i].longitude = m?.lon ?? (photos[i].exifChecked ? nil : photos[i].longitude)
+        }
+        if !ids.isEmpty {
+            resort()
+            recomputeCounts()
+            recomputePlaces()
+            revision += 1
+            metadataChanged()
+            startPlacePass()
+            if ids.contains(where: { metadata[$0]?.lat == nil }) { rescanSoon() }
+        }
+    }
+
+    func hasManualLocation(_ photo: Photo) -> Bool { metadata[photo.id]?.lat != nil }
+
+    // MARK: Retouches
+
+    func edits(of photo: Photo) -> PhotoEdits? { metadata[photo.id]?.edits }
+
+    func setEdits(_ edits: PhotoEdits?, for photo: Photo) {
+        metadata[photo.id, default: PhotoMetadata()].edits = (edits?.isIdentity ?? true) ? nil : edits
+        metadataChanged()
+    }
+
+    var editedCount: Int { metadata.values.reduce(0) { $0 + (($1.edits?.isIdentity ?? true) ? 0 : 1) } }
+
+    // MARK: Fichiers XMP
+
+    /// Active l'écriture automatique : chaque note, étiquette, personne, légende ou lieu est
+    /// reporté dans un fichier XMP à côté de la photo (fusionné avec celui d'un autre logiciel).
+    func setWriteXMP(_ on: Bool) {
+        writeXMP = on
+        UserDefaults.standard.set(on, forKey: "writeXMP")
+        if on { scheduleXMPWrite(immediately: true) }
+    }
+
+    private func xmpContent(_ id: String) -> XMPSidecar.Content {
+        let m = metadata[id]
+        return XMPSidecar.Content(rating: m?.rating ?? 0, tags: m?.tags ?? [], people: m?.people ?? [],
+                                  caption: m?.caption ?? "", latitude: m?.lat, longitude: m?.lon)
+    }
+
+    private func signature(_ c: XMPSidecar.Content) -> String {
+        "\(c.rating)|\(c.tags.joined(separator: ","))|\(c.people.joined(separator: ","))|\(c.caption)|\(c.latitude ?? 0),\(c.longitude ?? 0)"
+    }
+
+    private func scheduleXMPWrite(immediately: Bool = false) {
+        xmpTask?.cancel()
+        xmpTask = Task {
+            if !immediately { try? await Task.sleep(for: .seconds(2)) }
+            guard !Task.isCancelled else { return }
+            // Seulement ce qui a changé depuis la dernière écriture.
+            var jobs: [(id: String, url: URL, content: XMPSidecar.Content, sig: String)] = []
+            for (id, _) in metadata {
+                guard let p = photo(id: id), !p.offline else { continue }
+                let c = xmpContent(id)
+                let sig = signature(c)
+                let empty = c == XMPSidecar.Content()
+                if xmpState[id] == sig || (empty && xmpState[id] == nil) { continue }
+                jobs.append((id, p.url, c, sig))
+            }
+            guard !jobs.isEmpty else { return }
+            isWritingXMP = true
+            let results = await Task.detached(priority: .utility) { () -> [(String, String)] in
+                jobs.compactMap { job in
+                    (try? XMPSidecar.write(job.content, for: job.url)) != nil ? (job.id, job.sig) : nil
+                }
+            }.value
+            for (id, sig) in results { xmpState[id] = sig }
+            isWritingXMP = false
+            let state = xmpState, url = xmpStateURL
+            Task.detached(priority: .background) {
+                if let data = try? JSONEncoder().encode(state) { try? data.write(to: url, options: .atomic) }
+            }
+            if immediately { notice = "\(results.count) fichier(s) XMP écrit(s) ou mis à jour." }
+        }
+    }
+
+    /// Reprend les informations des fichiers XMP existants (Mylio, Lightroom, digiKam…) :
+    /// notes, mots-clés, personnes et zones des visages, légendes, lieux. Rien n'est écrasé.
+    func importSidecars() {
+        guard !isImportingXMP else { return }
+        isImportingXMP = true
+        let paths = sidecarPaths
+        // Correspondance « dossier/nom sans extension » → photos (pour les sidecars « photo.xmp »).
+        var byStem: [String: [String]] = [:]
+        for p in photos where !p.offline { byStem[p.url.deletingPathExtension().path, default: []].append(p.id) }
+        let ids = Set(indexByID.keys)
+        Task {
+            let found = await Task.detached(priority: .userInitiated) { () -> [(String, XMPSidecar.Content)] in
+                paths.compactMap { path -> (String, XMPSidecar.Content)? in
+                    let withoutXMP = String(path.dropLast(4))
+                    let target: String?
+                    if ids.contains(withoutXMP) {
+                        target = withoutXMP
+                    } else if let list = byStem[withoutXMP], list.count == 1 {
+                        target = list[0]
+                    } else {
+                        target = nil
+                    }
+                    guard let target, let c = XMPSidecar.read(URL(fileURLWithPath: path)) else { return nil }
+                    return (target, c)
+                }
+            }.value
+            var photosChanged = 0, people = Set<String>(), ratings = 0, located: [String] = []
+            for (id, c) in found {
+                var m = metadata[id] ?? PhotoMetadata()
+                let before = m
+                if c.rating > m.rating { m.rating = c.rating; ratings += 1 }
+                for t in c.tags where !m.tags.contains(t) { m.tags.append(t) }
+                for n in c.people where !m.people.contains(n) { m.people.append(n) }
+                people.formUnion(c.people)
+                if m.caption.isEmpty, !c.caption.isEmpty { m.caption = c.caption }
+                let rects = c.regions.filter { $0.w > 0 }
+                if m.faces.isEmpty, !rects.isEmpty { m.faces = rects }
+                if let la = c.latitude, let lo = c.longitude, let p = photo(id: id), !p.hasLocation, m.lat == nil {
+                    m.lat = la
+                    m.lon = lo
+                    located.append(id)
+                }
+                if m != before {
+                    metadata[id] = m
+                    photosChanged += 1
+                }
+            }
+            xmpImported = true
+            UserDefaults.standard.set(true, forKey: "xmpImported")
+            isImportingXMP = false
+            if located.isEmpty { metadataChanged() } else { applyManualLocations(located) }
+            notice = "\(found.count) fichiers XMP lus : \(photosChanged) photos enrichies (\(people.count) personnes, \(ratings) notes, \(located.count) lieux). Vos fichiers n'ont pas été modifiés."
+        }
+    }
+
+    func dismissXMPBanner() {
+        xmpImported = true
+        UserDefaults.standard.set(true, forKey: "xmpImported")
     }
 
     // MARK: Persistance

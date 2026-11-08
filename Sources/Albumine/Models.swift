@@ -14,6 +14,8 @@ struct Photo: Identifiable, Hashable {
     /// Orientation EXIF (1–8) du fichier.
     var orientation = 1
     let isVideo: Bool
+    /// Disque débranché : la photo vient de l'index (miniature en cache seulement).
+    var offline = false
     /// true quand les EXIF ont été lus (ou repris de l'index).
     var exifChecked = false
     /// Nom + dossier, normalisés pour la recherche (calculé une fois au scan).
@@ -42,12 +44,17 @@ struct PhotoMetadata: Codable, Equatable {
     var facesAnalyzed = false
     /// L'utilisateur a indiqué que la photo n'est pas ratée.
     var qualityOK = false
+    /// Lieu ajouté à la main (photo sans GPS).
+    var lat: Double?
+    var lon: Double?
+    /// Retouches non destructives.
+    var edits: PhotoEdits?
 
     init() {}
 
     var isEmpty: Bool {
         rating == 0 && tags.isEmpty && people.isEmpty && albums.isEmpty
-            && caption.isEmpty && rotation == 0 && faces.isEmpty && !facesAnalyzed && !qualityOK
+            && caption.isEmpty && rotation == 0 && faces.isEmpty && !facesAnalyzed && !qualityOK && lat == nil && (edits?.isIdentity ?? true)
     }
 
     /// Nombre d'informations saisies (sert à choisir quelle copie garder parmi des doublons).
@@ -55,7 +62,7 @@ struct PhotoMetadata: Codable, Equatable {
 
     var hasUnnamedFaces: Bool { faces.contains { $0.name == nil } }
 
-    private enum CodingKeys: String, CodingKey { case rating, tags, people, albums, caption, rotation, faces, facesAnalyzed, qualityOK }
+    private enum CodingKeys: String, CodingKey { case rating, tags, people, albums, caption, rotation, faces, facesAnalyzed, qualityOK, lat, lon, edits }
 
     // Champs facultatifs : les anciens fichiers restent lisibles, les champs vides ne sont pas écrits.
     init(from decoder: Decoder) throws {
@@ -69,6 +76,9 @@ struct PhotoMetadata: Codable, Equatable {
         faces = try c.decodeIfPresent([FaceRegion].self, forKey: .faces) ?? []
         facesAnalyzed = try c.decodeIfPresent(Bool.self, forKey: .facesAnalyzed) ?? false
         qualityOK = try c.decodeIfPresent(Bool.self, forKey: .qualityOK) ?? false
+        lat = try c.decodeIfPresent(Double.self, forKey: .lat)
+        lon = try c.decodeIfPresent(Double.self, forKey: .lon)
+        edits = try c.decodeIfPresent(PhotoEdits.self, forKey: .edits)
     }
 
     func encode(to encoder: Encoder) throws {
@@ -82,6 +92,9 @@ struct PhotoMetadata: Codable, Equatable {
         if !faces.isEmpty { try c.encode(faces, forKey: .faces) }
         if facesAnalyzed { try c.encode(true, forKey: .facesAnalyzed) }
         if qualityOK { try c.encode(true, forKey: .qualityOK) }
+        try c.encodeIfPresent(lat, forKey: .lat)
+        try c.encodeIfPresent(lon, forKey: .lon)
+        if let edits, !edits.isIdentity { try c.encode(edits, forKey: .edits) }
     }
 
     /// Fusion d'une copie dans la photo gardée (doublons).
@@ -93,6 +106,8 @@ struct PhotoMetadata: Codable, Equatable {
         if caption.isEmpty { caption = other.caption }
         if rotation == 0 { rotation = other.rotation }
         if faces.isEmpty { faces = other.faces; facesAnalyzed = facesAnalyzed || other.facesAnalyzed }
+        if lat == nil { lat = other.lat; lon = other.lon }
+        if edits == nil { edits = other.edits }
     }
 }
 
@@ -161,6 +176,7 @@ enum SidebarItem: Hashable {
     case similar
     case rejects
     case place(String)
+    case memories
 }
 
 enum PhotoGrouping: String, CaseIterable, Identifiable {
@@ -289,6 +305,8 @@ struct ScanResult {
     var photos: [Photo]
     /// Indices (dans `photos`) dont les EXIF restent à lire.
     var pending: [Int]
+    /// Fichiers XMP rencontrés (sidecars d'autres logiciels ou d'Albumine).
+    var sidecars: [String] = []
 }
 
 enum PhotoScanner {
@@ -308,6 +326,7 @@ enum PhotoScanner {
         let keySet = Set(keys)
         var photos: [Photo] = []
         var pending: [Int] = []
+        var sidecars: [String] = []
         var seen = Set<String>()
         for root in roots {
             guard let enumerator = FileManager.default.enumerator(
@@ -316,6 +335,7 @@ enum PhotoScanner {
             ) else { continue }
             for case let url as URL in enumerator {
                 let ext = url.pathExtension.lowercased()
+                if ext == "xmp" { sidecars.append(url.path); continue }
                 guard allExtensions.contains(ext),
                       let values = try? url.resourceValues(forKeys: keySet),
                       values.isRegularFile == true,
@@ -342,7 +362,28 @@ enum PhotoScanner {
                 photos.append(photo)
             }
         }
-        return ScanResult(photos: photos, pending: pending)
+        return ScanResult(photos: photos, pending: pending, sidecars: sidecars)
+    }
+
+    /// Photos d'un disque débranché, reconstituées depuis l'index.
+    static func offlinePhotos(under root: URL, index: [String: IndexStore.Entry]) -> [Photo] {
+        let prefix = root.path.hasSuffix("/") ? root.path : root.path + "/"
+        return index.compactMap { path, e -> Photo? in
+            guard path.hasPrefix(prefix) else { return nil }
+            let url = URL(fileURLWithPath: path)
+            let ext = url.pathExtension.lowercased()
+            let folder = url.deletingLastPathComponent().path
+            var p = Photo(url: url, folderPath: folder, fileSize: e.s, modificationDate: Date(timeIntervalSince1970: e.m),
+                          captureDate: e.d.map { Date(timeIntervalSince1970: $0) }, camera: e.c,
+                          isVideo: videoExtensions.contains(ext),
+                          searchKey: (url.lastPathComponent + " " + (folder as NSString).lastPathComponent).searchFolded)
+            p.latitude = e.la
+            p.longitude = e.lo
+            p.orientation = e.o ?? 1
+            p.exifChecked = true
+            p.offline = true
+            return p
+        }
     }
 
     /// Phase 2, lente : lit la date de prise de vue et l'appareil, en parallèle.

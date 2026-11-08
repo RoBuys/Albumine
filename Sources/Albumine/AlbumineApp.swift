@@ -32,6 +32,20 @@ struct AlbumineApp: App {
                 Button("Importer depuis Picasa…") { library.importPicasa() }
                     .disabled(library.isImportingPicasa)
             }
+            CommandMenu("Bibliothèque") {
+                Button("Importer les fichiers XMP (Mylio, Lightroom…)") { library.importSidecars() }
+                    .disabled(library.isImportingXMP || library.sidecarCount == 0)
+                Divider()
+                Toggle("Écrire les annotations dans des fichiers XMP", isOn: Binding(
+                    get: { library.writeXMP }, set: { library.setWriteXMP($0) }))
+                Button("Écrire les fichiers XMP maintenant") { library.setWriteXMP(true) }
+                    .disabled(library.isWritingXMP)
+                Divider()
+                Button("Rescanner les dossiers") { library.rescan() }
+                Button(library.contentPaused ? "Reprendre l'analyse du contenu" : "Mettre en pause l'analyse du contenu") {
+                    library.toggleContentPause()
+                }
+            }
         }
     }
 }

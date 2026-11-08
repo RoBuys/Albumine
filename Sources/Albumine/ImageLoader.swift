@@ -45,19 +45,21 @@ enum ImageLoader {
         return c
     }()
 
-    private static func key(_ url: URL, _ maxPixel: Int, _ rotation: Int) -> NSString {
-        "\(maxPixel)|\(rotation)|\(url.path)" as NSString
+    private static func key(_ url: URL, _ maxPixel: Int, _ rotation: Int, _ edits: PhotoEdits?) -> NSString {
+        "\(maxPixel)|\(rotation)|\(edits?.cacheKey ?? "")|\(url.path)" as NSString
     }
 
-    static func cached(_ url: URL, maxPixel: Int, rotation: Int = 0) -> NSImage? {
-        memory.object(forKey: key(url, maxPixel, rotation))
+    static func cached(_ url: URL, maxPixel: Int, rotation: Int = 0, edits: PhotoEdits? = nil) -> NSImage? {
+        memory.object(forKey: key(url, maxPixel, rotation, edits))
     }
 
     /// - Parameters:
     ///   - rotation: quarts de tour horaires appliqués à l'affichage (rotations Picasa / utilisateur).
     ///   - urgent: ignore la file d'attente (visionneuse).
-    static func load(_ url: URL, maxPixel: Int, rotation: Int = 0, urgent: Bool = false) async -> NSImage? {
-        if let hit = cached(url, maxPixel: maxPixel, rotation: rotation) { return hit }
+    static func load(_ url: URL, maxPixel: Int, rotation: Int = 0, edits: PhotoEdits? = nil,
+                     cropping: Bool = true, urgent: Bool = false) async -> NSImage? {
+        let edits = (edits?.isIdentity ?? true) ? nil : edits
+        if cropping, let hit = cached(url, maxPixel: maxPixel, rotation: rotation, edits: edits) { return hit }
         if !urgent {
             await limiter.acquire()
             // La cellule a pu disparaître de l'écran pendant l'attente.
@@ -69,17 +71,19 @@ enum ImageLoader {
         let useDiskCache = maxPixel == thumbnailPixels
         let image = await Task.detached(priority: .userInitiated) { () -> NSImage? in
             let cacheFile = useDiskCache ? diskCacheURL(for: url) : nil
-            if let cacheFile, let cg = readImage(cacheFile) { return nsImage(ImageDecoding.rotate(cg, rotation)) }
+            if let cacheFile, let cg = readImage(cacheFile) {
+                return nsImage(EditRenderer.render(ImageDecoding.rotate(cg, rotation), edits, cropping: cropping))
+            }
             guard let cg = ImageDecoding.decode(url, maxPixel: maxPixel) else {
                 Debug.log("échec du décodage : \(url.path)")
                 return nil
             }
             // Le cache disque garde l'image non pivotée : changer la rotation ne relit pas l'original.
             if let cacheFile { writeJPEG(cg, to: cacheFile) }
-            return nsImage(ImageDecoding.rotate(cg, rotation))
+            return nsImage(EditRenderer.render(ImageDecoding.rotate(cg, rotation), edits, cropping: cropping))
         }.value
         if !urgent { await limiter.release() }
-        if let image { memory.setObject(image, forKey: key(url, maxPixel, rotation)) }
+        if let image, cropping { memory.setObject(image, forKey: key(url, maxPixel, rotation, edits)) }
         return image
     }
 
@@ -98,9 +102,25 @@ enum ImageLoader {
     }
 
     /// Nom de fichier dérivé du chemin, de la taille et de la date : une photo modifiée est régénérée.
+    /// Signatures (taille, date) connues par la bibliothèque : les miniatures en cache restent
+    /// trouvables quand le disque est débranché, et on évite un accès disque par miniature.
+    private static let signatures = Mutex<[String: String]>([:])
+
+    static func registerSignatures(_ photos: [Photo]) {
+        var map: [String: String] = [:]
+        map.reserveCapacity(photos.count)
+        for p in photos { map[p.id] = "\(p.id)|\(Int(p.fileSize))|\(p.modificationDate.timeIntervalSince1970)" }
+        signatures.withLock { $0 = map }
+    }
+
     private static func diskCacheURL(for url: URL) -> URL? {
-        let values = try? url.resourceValues(forKeys: [.fileSizeKey, .contentModificationDateKey])
-        let signature = "\(url.path)|\(values?.fileSize ?? 0)|\(values?.contentModificationDate?.timeIntervalSince1970 ?? 0)"
+        let signature: String
+        if let known = signatures.withLock({ $0[url.path] }) {
+            signature = known
+        } else {
+            let values = try? url.resourceValues(forKeys: [.fileSizeKey, .contentModificationDateKey])
+            signature = "\(url.path)|\(values?.fileSize ?? 0)|\(values?.contentModificationDate?.timeIntervalSince1970 ?? 0)"
+        }
         let hash = Insecure.MD5.hash(data: Data(signature.utf8)).map { String(format: "%02x", $0) }.joined()
         let dir = AppPaths.thumbnails.appendingPathComponent(String(hash.prefix(2)), isDirectory: true)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
@@ -123,6 +143,7 @@ enum ImageLoader {
 struct ThumbnailView: View {
     let url: URL
     var rotation: Int = 0
+    var edits: PhotoEdits? = nil
     var maxPixel: Int = ImageLoader.thumbnailPixels
     @Etat private var image: NSImage?
     @Etat private var failed = false
@@ -142,14 +163,14 @@ struct ThumbnailView: View {
                 RoundedRectangle(cornerRadius: 4).fill(.quaternary)
             }
         }
-        .task(id: "\(rotation)|\(url.path)") {
-            if let hit = ImageLoader.cached(url, maxPixel: maxPixel, rotation: rotation) {
+        .task(id: "\(rotation)|\(edits?.cacheKey ?? "")|\(url.path)") {
+            if let hit = ImageLoader.cached(url, maxPixel: maxPixel, rotation: rotation, edits: edits) {
                 image = hit
                 return
             }
             image = nil
             failed = false
-            let loaded = await ImageLoader.load(url, maxPixel: maxPixel, rotation: rotation)
+            let loaded = await ImageLoader.load(url, maxPixel: maxPixel, rotation: rotation, edits: edits)
             guard !Task.isCancelled else { return }
             image = loaded
             failed = loaded == nil
