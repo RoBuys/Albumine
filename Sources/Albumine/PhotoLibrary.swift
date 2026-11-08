@@ -89,6 +89,8 @@ final class PhotoLibrary {
     private(set) var contentPaused = UserDefaults.standard.bool(forKey: "contentPaused")
     private(set) var rejectCount = 0
     @ObservationIgnored private var contentTask: Task<Void, Never>?
+    /// Identifies the current analysis pass (an outdated pass stops by itself).
+    @ObservationIgnored private var contentRun = 0
 
     // Memories: photos taken on the same day in previous years
     private(set) var memoryIDs: Set<String> = []
@@ -339,14 +341,14 @@ final class PhotoLibrary {
             var lastSave = 0
             while start < pending.count {
                 // Pause while thumbnails are loading.
-                while !(await ImageLoader.limiter.isIdle) {
-                    try? await Task.sleep(for: .milliseconds(150))
-                    if Task.isCancelled { return }
-                }
+                await ImageLoader.waitUntilIdle(maxSeconds: 15)
+                if Task.isCancelled { return }
                 if Task.isCancelled || generation != scanGeneration { return }
                 let end = min(start + chunk, pending.count)
                 let batch = Array(urls[start..<end])
-                let results = await Task.detached(priority: .utility) { PhotoScanner.readExif(batch) }.value
+                // Per-file time limit: a file that blocks the reader no longer freezes the pass.
+                let results = await Watchdog.map(batch, width: 6, timeout: 30) { PhotoScanner.readExif([$0])[0] }
+                    .map { $0 ?? ExifReader.Quick() }
                 if Task.isCancelled || generation != scanGeneration { return }
                 for (offset, r) in results.enumerated() {
                     let i = pending[start + offset]
@@ -691,7 +693,7 @@ final class PhotoLibrary {
             var byHash: [String: [String]] = [:]
             var start = 0
             while start < items.count {
-                while !(await ImageLoader.limiter.isIdle) { try? await Task.sleep(for: .milliseconds(150)) }
+                await ImageLoader.waitUntilIdle(maxSeconds: 15)
                 guard generation == scanGeneration else { isFindingDuplicates = false; return }
                 let end = min(start + 64, items.count)
                 let batch = Array(items[start..<end])
@@ -854,12 +856,13 @@ final class PhotoLibrary {
             var found = 0, suggested = 0
             var start = 0
             while start < items.count, !Task.isCancelled {
-                while !(await ImageLoader.limiter.isIdle) { try? await Task.sleep(for: .milliseconds(150)) }
+                await ImageLoader.waitUntilIdle(maxSeconds: 15)
                 let end = min(start + 6, items.count)
                 let batch = Array(items[start..<end])
-                let results = await Task.detached(priority: .utility) {
-                    batch.map { (id: $0.id, faces: FaceEngine.analyze(url: $0.url, rotation: $0.rotation, references: refs)) }
-                }.value
+                let detected = await Watchdog.map(batch, width: 2, timeout: 60) {
+                    FaceEngine.analyze(url: $0.url, rotation: $0.rotation, references: refs)
+                }
+                let results = zip(batch, detected).map { (id: $0.0.id, faces: $0.1 ?? []) }
                 for r in results {
                     var m = metadata[r.id] ?? PhotoMetadata()
                     m.faces = r.faces
@@ -924,6 +927,8 @@ final class PhotoLibrary {
         UserDefaults.standard.set(contentPaused, forKey: "contentPaused")
         if contentPaused {
             contentTask?.cancel()
+            contentTask = nil
+            contentRun += 1
         } else {
             startContentPass()
         }
@@ -932,41 +937,62 @@ final class PhotoLibrary {
     /// Analyzes not-yet-analyzed photos in the background (newest first).
     /// Fills the thumbnail cache along the way. Resumes where it left off.
     func startContentPass() {
-        guard contentTask == nil, !contentPaused else { return }
+        guard !contentPaused else { return }
+        // A new pass always replaces the previous one (even if it is still stuck or stopping):
+        // before, a restart requested at the wrong moment was ignored and analysis froze.
+        contentTask?.cancel()
+        contentTask = nil
+        contentRun += 1
+        let run = contentRun
         let pending = byDateNewest.filter { p in
             guard !p.offline else { return false }
             guard let e = analysis[p.id] else { return true }
             return e.s != p.fileSize || abs(e.m - p.modificationDate.timeIntervalSince1970) >= 1
                 || (e.v ?? 1) < ContentAnalyzer.version
         }
-        guard !pending.isEmpty else { return }
+        guard !pending.isEmpty else {
+            contentTotal = 0
+            contentDone = 0
+            return
+        }
         contentTotal = pending.count
         contentDone = 0
-        let generation = scanGeneration
         contentTask = Task {
             var start = 0
             var sinceSave = 0
             while start < pending.count {
-                // Priority to displayed thumbnails and to face analysis.
-                while !(await ImageLoader.limiter.isIdle) || isAnalyzingFaces {
+                // Priority to displayed thumbnails and face analysis, but never wait forever.
+                await ImageLoader.waitUntilIdle(maxSeconds: 15)
+                var waited = 0
+                while isAnalyzingFaces, waited < 75, !Task.isCancelled {
                     try? await Task.sleep(for: .milliseconds(200))
-                    if Task.isCancelled { break }
+                    waited += 1
                 }
-                if Task.isCancelled || generation != scanGeneration { break }
+                if Task.isCancelled || run != contentRun { return }
                 let end = min(start + 8, pending.count)
                 let batch = Array(pending[start..<end])
-                let results = await Task.detached(priority: .utility) { () -> [AnalysisEntry] in
-                    var out = [AnalysisEntry](repeating: AnalysisEntry(s: 0, m: 0), count: batch.count)
-                    out.withUnsafeMutableBufferPointer { buffer in
-                        DispatchQueue.concurrentPerform(iterations: batch.count) { i in
-                            buffer[i] = ContentAnalyzer.analyze(batch[i])
-                        }
+                // Each photo gets at most 60 s: a file that blocks a decoder no longer freezes the pass.
+                let results = await Watchdog.map(batch, width: 4, timeout: 60) { ContentAnalyzer.analyze($0) }
+                if run != contentRun { return }
+                var stuck: [String] = []
+                for (p, e) in zip(batch, results) {
+                    if let e {
+                        analysis[p.id] = e
+                    } else {
+                        // Marked as analyzed (empty) so it is not retried at every launch.
+                        analysis[p.id] = AnalysisEntry(s: p.fileSize, m: p.modificationDate.timeIntervalSince1970,
+                                                       v: ContentAnalyzer.version)
+                        stuck.append(p.id)
+                        Debug.log("analyse : délai dépassé pour \(p.url.path)")
                     }
-                    return out
-                }.value
-                for (p, e) in zip(batch, results) { analysis[p.id] = e }
+                }
+                if !stuck.isEmpty {
+                    for id in stuck { damaged[id] = "Analyse impossible (le fichier bloque le décodage)" }
+                    save()
+                }
                 contentDone = end
                 start = end
+                Debug.log("contenu : \(end) / \(pending.count) (passe \(run))")
                 sinceSave += batch.count
                 if sinceSave >= 1500 {
                     sinceSave = 0
@@ -974,9 +1000,12 @@ final class PhotoLibrary {
                     recomputeAnalysisDerived()
                 }
             }
+            guard run == contentRun else { return }
+            Debug.log("contenu : analyse terminée (passe \(run))")
             saveAnalysis()
             recomputeAnalysisDerived()
-            if start >= pending.count { contentTotal = 0; contentDone = 0 }
+            contentTotal = 0
+            contentDone = 0
             contentTask = nil
         }
     }
@@ -1481,18 +1510,11 @@ final class PhotoLibrary {
             var found: [String: String] = [:]
             var start = 0
             while start < items.count, !Task.isCancelled {
-                while !(await ImageLoader.limiter.isIdle) { try? await Task.sleep(for: .milliseconds(150)) }
+                await ImageLoader.waitUntilIdle(maxSeconds: 15)
                 let end = min(start + 64, items.count)
                 let batch = Array(items[start..<end])
-                let results = await Task.detached(priority: .utility) { () -> [String?] in
-                    var out = [String?](repeating: nil, count: batch.count)
-                    out.withUnsafeMutableBufferPointer { buffer in
-                        DispatchQueue.concurrentPerform(iterations: batch.count) { i in
-                            buffer[i] = IntegrityChecker.problem(batch[i])
-                        }
-                    }
-                    return out
-                }.value
+                let checked = await Watchdog.map(batch, width: 4, timeout: 60) { IntegrityChecker.problem($0) }
+                let results = checked.map { $0 ?? "Lecture bloquée (fichier ou disque défaillant ?)" }
                 for (p, r) in zip(batch, results) { if let r { found[p.id] = r } }
                 integrityDone = end
                 start = end

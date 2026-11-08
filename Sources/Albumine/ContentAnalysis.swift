@@ -23,6 +23,12 @@ enum ContentAnalyzer {
     static let version = 2
 
     static func analyze(_ photo: Photo) -> AnalysisEntry {
+        #if DEBUG
+        // Test hook: simulates a file that blocks the decoder forever.
+        if let hang = ProcessInfo.processInfo.environment["ALBUMINE_TEST_HANG"], photo.name.contains(hang) {
+            Thread.sleep(forTimeInterval: .greatestFiniteMagnitude)
+        }
+        #endif
         var entry = AnalysisEntry(s: photo.fileSize, m: photo.modificationDate.timeIntervalSince1970, v: version)
         guard !photo.isVideo, let image = ImageLoader.diskThumbnail(photo.url) else { return entry }
 

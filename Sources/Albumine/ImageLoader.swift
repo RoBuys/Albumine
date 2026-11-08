@@ -39,6 +39,14 @@ enum ImageLoader {
     static let viewerPixels = 3200
     static let limiter = AsyncLimiter(limit: 6)
 
+    /// Waits until no thumbnail is loading, for at most `maxSeconds` (never forever).
+    static func waitUntilIdle(maxSeconds: Double) async {
+        let deadline = Date().addingTimeInterval(maxSeconds)
+        while !(await limiter.isIdle), Date() < deadline, !Task.isCancelled {
+            try? await Task.sleep(for: .milliseconds(150))
+        }
+    }
+
     private static let memory: NSCache<NSString, NSImage> = {
         let c = NSCache<NSString, NSImage>()
         c.countLimit = 4000
@@ -69,7 +77,8 @@ enum ImageLoader {
             }
         }
         let useDiskCache = maxPixel == thumbnailPixels
-        let image = await Task.detached(priority: .userInitiated) { () -> NSImage? in
+        // Time limit: a decoder that never returns must not keep a decoding slot forever.
+        let decoded: NSImage?? = await Watchdog.withTimeout(urgent ? 60 : 25, qos: .userInitiated) { () -> NSImage? in
             let cacheFile = useDiskCache ? diskCacheURL(for: url) : nil
             if let cacheFile, let cg = readImage(cacheFile) {
                 return nsImage(EditRenderer.render(ImageDecoding.rotate(cg, rotation), edits, cropping: cropping))
@@ -81,7 +90,9 @@ enum ImageLoader {
             // The disk cache keeps the unrotated image: changing the rotation does not re-read the original.
             if let cacheFile { writeJPEG(cg, to: cacheFile) }
             return nsImage(EditRenderer.render(ImageDecoding.rotate(cg, rotation), edits, cropping: cropping))
-        }.value
+        }
+        let image = decoded ?? nil
+        if decoded == nil { Debug.log("miniature : délai dépassé pour \(url.path)") }
         if !urgent { await limiter.release() }
         if let image, cropping { memory.setObject(image, forKey: key(url, maxPixel, rotation, edits)) }
         return image
