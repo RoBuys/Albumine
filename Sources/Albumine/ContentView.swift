@@ -116,6 +116,10 @@ struct ContentView: View {
         .sheet(isPresented: Binding(get: { dateFixPhotos != nil }, set: { if !$0 { dateFixPhotos = nil } })) {
             DateFixSheet(photos: dateFixPhotos ?? [])
         }
+        .sheet(isPresented: Binding(get: { Updater.shared.showSheet }, set: { Updater.shared.showSheet = $0 })) {
+            UpdateSheet()
+        }
+        .task { Updater.shared.checkAtLaunch() }
         .animation(.easeInOut(duration: 0.15), value: viewerList == nil)
         .alert(
             "Import Picasa terminé",

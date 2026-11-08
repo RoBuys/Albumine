@@ -156,6 +156,10 @@ final class PhotoLibrary {
         load()
         if let data = try? Data(contentsOf: xmpStateURL),
            let state = try? JSONDecoder().decode([String: String].self, from: data) { xmpState = state }
+        // Before quitting for an update: save everything synchronously.
+        volumeObservers.append(NotificationCenter.default.addObserver(forName: .albumineWillQuitForUpdate, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.saveNow() }
+        })
         // A drive was connected / disconnected: rescan the folders.
         let nc = NSWorkspace.shared.notificationCenter
         for name in [NSWorkspace.didMountNotification, NSWorkspace.didUnmountNotification] {
@@ -1656,6 +1660,18 @@ final class PhotoLibrary {
         personCovers = store.personCovers ?? [:]
         damaged = store.damaged ?? [:]
         lastIntegrityCheck = store.lastIntegrityCheck
+    }
+
+    /// Immediate, synchronous save of the library, index and analysis (before quitting).
+    func saveNow() {
+        saveTask?.cancel()
+        let store = Store(roots: roots.map(\.path), metadata: metadata.filter { !$0.value.isEmpty },
+                          picasaImported: picasaImported, albums: albumNames, excluded: excludedPaths,
+                          hiddenPeople: hiddenPeople.sorted(), personCovers: personCovers,
+                          damaged: damaged, lastIntegrityCheck: lastIntegrityCheck)
+        if let data = try? JSONEncoder().encode(store) { try? data.write(to: storeURL, options: .atomic) }
+        IndexStore.save(photos)
+        AnalysisStore.save(analysis)
     }
 
     private func save() {

@@ -23,6 +23,9 @@ struct AlbumineApp: App {
                 .frame(minWidth: 900, minHeight: 600)
         }
         .commands {
+            CommandGroup(after: .appInfo) {
+                Button("Rechercher les mises à jour…") { Task { await Updater.shared.check(manual: true) } }
+            }
             CommandGroup(after: .newItem) {
                 Button("Ajouter un dossier…") { library.addFolderWithPanel() }
                     .keyboardShortcut("o")

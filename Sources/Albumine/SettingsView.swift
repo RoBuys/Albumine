@@ -145,9 +145,23 @@ struct FoldersSettings: View {
 /// General options.
 struct OptionsSettings: View {
     @Environment(PhotoLibrary.self) private var library
+    @AppStorage("updateAutomatic") private var autoUpdate = true
 
     var body: some View {
         Form {
+            Section("Mises à jour") {
+                LabeledContent("Version installée") { Text(Updater.currentVersion) }
+                Toggle("Rechercher automatiquement les mises à jour", isOn: $autoUpdate)
+                HStack {
+                    Text(Updater.shared.lastCheck.map { "Dernière vérification : \($0.formatted(date: .abbreviated, time: .shortened))" } ?? "Jamais vérifié")
+                        .font(.caption).foregroundStyle(.secondary)
+                    Spacer()
+                    Button("Rechercher maintenant") { Task { await Updater.shared.check(manual: true) } }
+                        .disabled(Updater.shared.phase == .checking)
+                }
+                Text("Les nouvelles versions publiées sur GitHub sont proposées au démarrage (une fois par jour au plus), puis installées après vérification de la signature de l'auteur.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
             Section("Analyse du contenu") {
                 Toggle("Analyser le contenu des photos en arrière-plan", isOn: Binding(
                     get: { !library.contentPaused }, set: { on in if on == library.contentPaused { library.toggleContentPause() } }))
