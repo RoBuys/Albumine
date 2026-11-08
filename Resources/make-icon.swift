@@ -1,12 +1,12 @@
-// Génère l'icône d'Albumine (monogramme A, variante « Ciel ») : swift Resources/make-icon.swift
-// Produit Resources/AppIcon.icns et Resources/AppIcon-1024.png.
+// Generates Albumine's icon ("A" monogram, "Sky" variant): swift Resources/make-icon.swift
+// Produces Resources/AppIcon.icns and Resources/AppIcon-1024.png.
 import AppKit
 
 let size: CGFloat = 1024
 let ctx = CGContext(data: nil, width: Int(size), height: Int(size), bitsPerComponent: 8, bytesPerRow: 0,
                     space: CGColorSpace(name: CGColorSpace.sRGB)!,
                     bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
-// Repère « écran » : origine en haut à gauche.
+// Screen coordinates: origin at the top left.
 ctx.translateBy(x: 0, y: size)
 ctx.scaleBy(x: 1, y: -1)
 
@@ -15,17 +15,17 @@ func color(_ hex: UInt32, _ alpha: CGFloat = 1) -> CGColor {
             blue: CGFloat(hex & 0xFF) / 255, alpha: alpha)
 }
 
-// Grille d'icône macOS : corps de 824 px centré, coins arrondis.
+// macOS icon grid: centered 824 px body with rounded corners.
 let inset: CGFloat = 100, body: CGFloat = 824
-let k = body / 160 // le dessin d'origine fait 160 × 160
+let k = body / 160 // the original drawing is 160 × 160
 func p(_ x: CGFloat, _ y: CGFloat) -> CGPoint { CGPoint(x: inset + x * k, y: inset + y * k) }
 
-// Ombre portée discrète, comme les icônes système.
+// Subtle drop shadow, like system icons.
 ctx.saveGState()
 ctx.setShadow(offset: CGSize(width: 0, height: 10), blur: 28, color: color(0x1B3A6B, 0.28))
 ctx.addPath(CGPath(roundedRect: CGRect(x: inset, y: inset, width: body, height: body),
                    cornerWidth: 36 * k, cornerHeight: 36 * k, transform: nil))
-ctx.setFillColor(color(0xCCDEFF)) // bleu ciel (un peu plus soutenu que la maquette)
+ctx.setFillColor(color(0xCCDEFF)) // sky blue (slightly deeper than the mock-up)
 ctx.fillPath()
 ctx.restoreGState()
 
@@ -37,9 +37,9 @@ func bar(from a: CGPoint, to b: CGPoint, _ c: CGColor) {
     ctx.addLine(to: b)
     ctx.strokePath()
 }
-bar(from: p(80, 36), to: p(50, 124), color(0xFF9E7A, 0.92)) // pêche
-bar(from: p(80, 36), to: p(110, 124), color(0x5B9BFF, 0.80)) // bleu
-ctx.setFillColor(color(0xFFD166)) // soleil
+bar(from: p(80, 36), to: p(50, 124), color(0xFF9E7A, 0.92)) // peach
+bar(from: p(80, 36), to: p(110, 124), color(0x5B9BFF, 0.80)) // blue
+ctx.setFillColor(color(0xFFD166)) // sun
 ctx.fillEllipse(in: CGRect(x: p(70, 88).x, y: p(70, 88).y, width: 20 * k, height: 20 * k))
 
 let image = ctx.makeImage()!
@@ -48,7 +48,7 @@ let master = dir.appendingPathComponent("AppIcon-1024.png")
 let rep = NSBitmapImageRep(cgImage: image)
 try! rep.representation(using: .png, properties: [:])!.write(to: master)
 
-// Jeu de tailles pour iconutil.
+// Size set for iconutil.
 let iconset = FileManager.default.temporaryDirectory.appendingPathComponent("AppIcon.iconset")
 try? FileManager.default.removeItem(at: iconset)
 try! FileManager.default.createDirectory(at: iconset, withIntermediateDirectories: true)
@@ -73,4 +73,4 @@ task.executableURL = URL(fileURLWithPath: "/usr/bin/iconutil")
 task.arguments = ["-c", "icns", iconset.path, "-o", dir.appendingPathComponent("AppIcon.icns").path]
 try! task.run()
 task.waitUntilExit()
-print(task.terminationStatus == 0 ? "✅ AppIcon.icns créé" : "❌ iconutil a échoué")
+print(task.terminationStatus == 0 ? "✅ AppIcon.icns created" : "❌ iconutil failed")

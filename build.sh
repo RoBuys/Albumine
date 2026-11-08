@@ -1,5 +1,5 @@
 #!/bin/zsh
-# Compile Albumine et crée Albumine.app dans le dossier courant.
+# Builds Albumine and creates Albumine.app in the current folder.
 set -e
 cd "$(dirname "$0")"
 swift build -c release
@@ -30,4 +30,4 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 </plist>
 PLIST
 codesign --force --sign - "$APP" >/dev/null 2>&1 || true
-echo "✅ $APP prêt"
+echo "✅ $APP ready"
