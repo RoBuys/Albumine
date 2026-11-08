@@ -23,11 +23,17 @@ struct ContentView: View {
     @Etat private var albumName = ""
     @Etat private var confirmTrashCopies = false
     @Etat private var photosToTrash: [Photo]?
+    @Etat private var confirmTrashSimilar = false
+    @Etat private var slideshowPhotos: [Photo]?
+    @Etat private var exportPhotos: [Photo]?
     @FocusState private var gridFocused: Bool
 
     /// Tout ce qui influence la liste affichée. Elle n'est recalculée que si ceci change.
     private struct FilterKey: Equatable {
         var revision: Int
+        var metadataRevision: Int
+        var analysisRevision: Int
+        var mapTick: Int
         var sidebar: SidebarItem?
         var search: String
         var sort: PhotoSort
@@ -36,8 +42,29 @@ struct ContentView: View {
     }
 
     private var filterKey: FilterKey {
-        FilterKey(revision: library.revision, sidebar: sidebar, search: search, sort: sort,
-                  grouping: grouping, minRating: minRating)
+        FilterKey(revision: library.revision,
+                  metadataRevision: dependsOnMetadata ? library.metadataRevision : 0,
+                  analysisRevision: dependsOnAnalysis ? library.analysisRevision &+ library.similarRevision &* 7919 : 0,
+                  mapTick: sidebar == .map ? library.exifDone / 5000 : 0,
+                  sidebar: sidebar, search: search, sort: sort, grouping: grouping, minRating: minRating)
+    }
+
+    /// La liste ne dépend des notes/étiquettes/personnes que pour certaines vues :
+    /// ailleurs, noter une photo ne recalcule rien.
+    private var dependsOnMetadata: Bool {
+        if minRating > 0 || !search.isEmpty { return true }
+        switch sidebar ?? .all {
+        case .starred, .tag, .person, .album, .unnamedFaces, .duplicates, .similar, .rejects: return true
+        default: return false
+        }
+    }
+
+    private var dependsOnAnalysis: Bool {
+        if !search.isEmpty || grouping == .event { return true }
+        switch sidebar ?? .all {
+        case .similar, .rejects, .place: return true
+        default: return false
+        }
     }
 
     var body: some View {
@@ -63,6 +90,14 @@ struct ContentView: View {
         .toolbar { toolbar }
         .onChange(of: sidebar) { selection.removeAll(); anchor = nil }
         .overlay { viewer }
+        .overlay {
+            if let list = slideshowPhotos {
+                SlideshowView(photos: list) { slideshowPhotos = nil; gridFocused = true }
+            }
+        }
+        .sheet(isPresented: Binding(get: { exportPhotos != nil }, set: { if !$0 { exportPhotos = nil } })) {
+            ExportSheet(photos: exportPhotos ?? [])
+        }
         .animation(.easeInOut(duration: 0.15), value: viewerList == nil)
         .alert(
             "Import Picasa terminé",
@@ -128,6 +163,8 @@ struct ContentView: View {
             PhotoMapView(photos: visible, selection: $selection, onOpen: open)
         } else if item == .duplicates, library.duplicateGroups == nil || library.isFindingDuplicates {
             duplicatesIntro
+        } else if item == .similar, library.similarGroups == nil || library.isFindingSimilar {
+            similarIntro
         } else if visible.isEmpty {
             emptyState(item)
         } else {
@@ -137,6 +174,9 @@ struct ContentView: View {
                         picasaBanner
                         if item == .duplicates { duplicatesBar }
                         if item == .unnamedFaces { facesBar }
+                        if item == .similar { similarBar }
+                        if item == .rejects { rejectsBar }
+                        if item == .all || item == .rejects || item == .similar { analysisBanner }
                     }
                 }
         }
@@ -252,6 +292,8 @@ struct ContentView: View {
         switch sidebar ?? .all {
         case .duplicates:
             return library.duplicateKeepers.contains(photo.id) ? "À garder" : nil
+        case .similar:
+            return library.similarBest.contains(photo.id) ? "Meilleure" : nil
         case .unnamedFaces:
             let suggestions = library.faces(of: photo).filter { $0.name == nil }.compactMap(\.suggestion)
             return suggestions.isEmpty ? nil : Set(suggestions).sorted().joined(separator: ", ") + " ?"
@@ -284,7 +326,13 @@ struct ContentView: View {
         if sidebar == .unnamedFaces {
             Button("Confirmer les noms proposés") { library.acceptSuggestions(in: targets) }
         }
+        if sidebar == .rejects {
+            Button("Ce n'est pas raté") { library.markQualityOK(targets) }
+        }
         Button("Analyser les visages") { library.analyzeFaces(in: targets) }
+        Divider()
+        Button("Diaporama") { startSlideshow(targets.count > 1 ? targets : visible, from: photo) }
+        Button("Exporter…") { exportPhotos = targets }
         Divider()
         Button("Pivoter à droite") { library.rotate(targets, by: 1) }
         Button("Pivoter à gauche") { library.rotate(targets, by: -1) }
@@ -365,6 +413,87 @@ struct ContentView: View {
         }
     }
 
+    private var similarIntro: some View {
+        ContentUnavailableView {
+            Label("Photos similaires", systemImage: "square.stack.3d.down.right")
+        } description: {
+            if library.isFindingSimilar {
+                ProgressView("Comparaison des photos…")
+            } else {
+                Text("Rafales, prises successives et versions redimensionnées d'une même photo. Nécessite l'analyse du contenu (\(analysisProgressText)).")
+            }
+        } actions: {
+            if !library.isFindingSimilar {
+                Button("Rechercher les photos similaires") { library.findSimilar() }
+                    .buttonStyle(.borderedProminent)
+            }
+        }
+    }
+
+    private var analysisProgressText: String {
+        library.isAnalyzingContent
+            ? "\(library.contentDone.formatted()) / \(library.contentTotal.formatted()) photos analysées"
+            : "terminée"
+    }
+
+    private var similarBar: some View {
+        Banner(systemImage: "square.stack.3d.down.right") {
+            Text("\((library.similarGroups ?? []).count.formatted()) séries · \(library.similarExtras.formatted()) photos en plus de la meilleure")
+                .font(.headline)
+            Text("« Meilleure » = la plus réussie selon l'analyse (netteté, composition) et vos annotations. Vérifiez avant de trier.")
+                .font(.caption).foregroundStyle(.secondary)
+        } actions: {
+            Button("Relancer") { library.findSimilar() }
+            Button("Garder la meilleure de chaque série…") { confirmTrashSimilar = true }
+                .buttonStyle(.borderedProminent)
+                .disabled(library.similarExtras == 0 || library.isTrashing)
+        }
+        .confirmationDialog("Mettre \(library.similarExtras.formatted()) photos à la corbeille ?", isPresented: $confirmTrashSimilar) {
+            Button("Garder la meilleure de chaque série", role: .destructive) { library.trashSimilarExtras() }
+        } message: {
+            Text("Les autres photos de chaque série vont dans la Corbeille du disque (récupérables). Leurs notes, personnes et albums sont reportés sur la photo gardée.")
+        }
+    }
+
+    private var rejectsBar: some View {
+        Banner(systemImage: "hand.thumbsdown") {
+            Text("Photos probablement ratées : floues, trop sombres, surexposées, captures d'écran…").font(.headline)
+            Text("Sélectionnez puis mettez à la corbeille, ou « Ce n'est pas raté » pour les retirer de cette liste.")
+                .font(.caption).foregroundStyle(.secondary)
+        } actions: {
+            Button("Ce n'est pas raté") { library.markQualityOK(selectedPhotos); selection.removeAll() }
+                .disabled(selection.isEmpty)
+            Button("Mettre la sélection à la corbeille…") { photosToTrash = selectedPhotos }
+                .buttonStyle(.borderedProminent)
+                .disabled(selection.isEmpty)
+        }
+    }
+
+    @ViewBuilder
+    private var analysisBanner: some View {
+        if library.isAnalyzingContent || library.contentPaused {
+            Banner(systemImage: "sparkles") {
+                Text(library.contentPaused ? "Analyse du contenu en pause"
+                     : "Analyse du contenu : \(library.contentDone.formatted()) / \(library.contentTotal.formatted())")
+                    .font(.headline)
+                Text("Permet la recherche par contenu (« plage », « neige », « chien »…), les photos similaires et les photos ratées. Tout reste sur votre Mac.")
+                    .font(.caption).foregroundStyle(.secondary)
+            } actions: {
+                Button(library.contentPaused ? "Reprendre" : "Pause") { library.toggleContentPause() }
+            }
+        }
+    }
+
+    private func startSlideshow(_ list: [Photo], from photo: Photo? = nil) {
+        let images = list.filter { !$0.isVideo }
+        guard !images.isEmpty else { return }
+        if let photo, let i = images.firstIndex(of: photo) {
+            slideshowPhotos = Array(images[i...] + images[..<i])
+        } else {
+            slideshowPhotos = images
+        }
+    }
+
     private var facesBar: some View {
         Banner(systemImage: "person.crop.circle.badge.questionmark") {
             Text("Les noms proposés (« Prénom ? ») sont des suggestions à vérifier").font(.headline)
@@ -427,8 +556,11 @@ struct ContentView: View {
     private func computeList() -> ([Photo], [PhotoGroup]) {
         let item = sidebar ?? .all
         if item == .duplicates { return duplicateList() }
+        if item == .similar { return idGroups(library.similarGroups ?? [], title: { items in
+            "Série de \(items.count) photos" }) }
 
-        var list = library.photos
+        // Liste déjà triée par date (tri fait une seule fois par la bibliothèque).
+        var list = sort == .oldest ? Array(library.byDateNewest.reversed()) : library.byDateNewest
         switch item {
         case .all, .duplicates: break
         case .starred: list = list.filter { library.rating(of: $0) > 0 }
@@ -438,7 +570,10 @@ struct ContentView: View {
         case .album(let name): list = list.filter { library.albums(of: $0).contains(name) }
         case .unnamedFaces: list = list.filter { library.faces(of: $0).contains { $0.name == nil } }
         case .videos: list = list.filter(\.isVideo)
-        case .map: list = list.filter(\.hasLocation)
+        case .map: list = library.photos.filter(\.hasLocation)
+        case .similar: break
+        case .rejects: list = list.filter { library.rejectReason(of: $0) != nil }
+        case .place(let name): list = list.filter { library.placeName(of: $0) == name }
         }
         if minRating > 0 {
             list = list.filter { library.rating(of: $0) >= minRating }
@@ -447,12 +582,16 @@ struct ContentView: View {
         if !tokens.isEmpty {
             list = list.filter { library.matches($0, tokens: tokens) }
         }
-        switch sort {
-        case .newest: list.sort { $0.date > $1.date }
-        case .oldest: list.sort { $0.date < $1.date }
-        case .name: list.sort { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+        if sort == .name {
+            list.sort { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
         }
         if item == .map { return (list, []) }
+        if item == .rejects {
+            return group(list) { p in
+                let r = library.rejectReason(of: p) ?? .poor
+                return (r.rawValue, r.rawValue, nil)
+            }
+        }
         if item == .unnamedFaces {
             return group(list) { p in
                 let s = library.faces(of: p).first { $0.name == nil }?.suggestion
@@ -482,7 +621,68 @@ struct ContentView: View {
                 let y = String(calendar.component(.year, from: p.date))
                 return (y, y, nil)
             }
+        case .event:
+            return eventGroups(sort == .name ? library.byDateNewest.filter { Set(list.map(\.id)).contains($0.id) } : list)
         }
+    }
+
+    /// Événements : une coupure quand plus de 6 h séparent deux photos,
+    /// ou plus d'1 h et plus de 40 km. Titre = lieu le plus fréquent, sinon dossier.
+    private func eventGroups(_ list: [Photo]) -> ([Photo], [PhotoGroup]) {
+        var groups: [PhotoGroup] = []
+        var start = 0
+        func close(_ end: Int) {
+            guard end > start else { return }
+            let items = Array(list[start..<end])
+            let places = items.compactMap { library.placeName(of: $0) }
+            let title = mostCommon(places) ?? mostCommon(items.map(\.folderName)) ?? "Événement"
+            groups.append(PhotoGroup(id: "ev\(start)-\(items[0].id)", title: title,
+                                     subtitle: eventSubtitle(items), range: start..<end,
+                                     folderPath: places.isEmpty ? items[0].folderPath : nil))
+            start = end
+        }
+        for i in list.indices.dropFirst() {
+            let a = list[i - 1], b = list[i]
+            let gap = abs(a.date.timeIntervalSince(b.date))
+            var far = false
+            if let la = a.latitude, let lo = a.longitude, let lb = b.latitude, let lob = b.longitude {
+                far = abs(la - lb) + abs(lo - lob) > 0.4 // ≈ 40 km
+            }
+            if gap > 6 * 3600 || (gap > 3600 && far) { close(i) }
+        }
+        close(list.count)
+        return (list, groups)
+    }
+
+    private func mostCommon(_ values: [String]) -> String? {
+        var counts: [String: Int] = [:]
+        for v in values { counts[v, default: 0] += 1 }
+        return counts.max { $0.value < $1.value }?.key
+    }
+
+    private func eventSubtitle(_ items: [Photo]) -> String {
+        let count = "\(items.count.formatted()) élément\(items.count > 1 ? "s" : "")"
+        guard let first = items.map(\.date).min(), let last = items.map(\.date).max() else { return count }
+        let sameDay = Calendar.current.isDate(first, inSameDayAs: last)
+        let a = first.formatted(.dateTime.day().month(.abbreviated).year())
+        let b = last.formatted(.dateTime.day().month(.abbreviated).year())
+        return sameDay ? "\(count) · \(a)" : "\(count) · \(a) – \(b)"
+    }
+
+    /// Sections à partir de groupes d'identifiants (photos similaires…).
+    private func idGroups(_ idGroups: [[String]], title: ([Photo]) -> String) -> ([Photo], [PhotoGroup]) {
+        var list: [Photo] = []
+        var groups: [PhotoGroup] = []
+        for (n, ids) in idGroups.enumerated() {
+            let items = ids.compactMap { library.photo(id: $0) }
+            guard items.count > 1 else { continue }
+            let start = list.count
+            list += items
+            groups.append(PhotoGroup(id: "g\(n)-\(items[0].id)", title: title(items),
+                                     subtitle: eventSubtitle(items), range: start..<list.count,
+                                     folderPath: items[0].folderPath))
+        }
+        return (list, groups)
     }
 
     /// Découpe une liste triée en sections contiguës, dans l'ordre de première apparition.
@@ -547,6 +747,9 @@ struct ContentView: View {
         case .videos: return "Vidéos"
         case .duplicates: return "Doublons"
         case .map: return "Carte"
+        case .similar: return "Photos similaires"
+        case .rejects: return "Photos ratées"
+        case .place(let name): return name
         }
     }
 
@@ -601,6 +804,24 @@ struct ContentView: View {
                 .help("Détecter et reconnaître les visages des photos affichées")
                 .disabled(visible.isEmpty || sidebar == .map)
             }
+
+            Button { startSlideshow(selection.count > 1 ? selectedPhotos.sorted { $0.date < $1.date } : visible) } label: {
+                Label("Diaporama", systemImage: "play.rectangle")
+            }
+            .help("Diaporama de la sélection (ou de la vue)")
+            .disabled(visible.isEmpty || sidebar == .map)
+
+            Button { exportPhotos = selectedPhotos } label: {
+                Label("Exporter", systemImage: "square.and.arrow.down.on.square")
+            }
+            .help("Exporter la sélection (redimensionnée) vers un dossier")
+            .disabled(selection.isEmpty)
+
+            ShareLink(items: selectedPhotos.map(\.url)) {
+                Label("Partager", systemImage: "square.and.arrow.up")
+            }
+            .help("Partager la sélection (Mail, Messages, AirDrop…)")
+            .disabled(selection.isEmpty)
 
             Button { library.addFolderWithPanel() } label: {
                 Label("Ajouter un dossier", systemImage: "folder.badge.plus")

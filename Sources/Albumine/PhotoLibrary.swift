@@ -15,8 +15,13 @@ final class PhotoLibrary {
     /// Avancement de la lecture des EXIF en arrière-plan.
     private(set) var exifDone = 0
     private(set) var exifTotal = 0
-    /// Incrémenté quand la liste à afficher doit être recalculée.
+    /// Incrémenté quand l'ensemble des photos (ou leur ordre) change.
     private(set) var revision = 0
+    /// Incrémenté quand des notes, étiquettes, personnes… changent.
+    private(set) var metadataRevision = 0
+    /// Toutes les photos, de la plus récente à la plus ancienne (tri fait une seule fois).
+    @ObservationIgnored private(set) var byDateNewest: [Photo] = []
+    @ObservationIgnored private var saveTask: Task<Void, Never>?
 
     // Données dérivées, recalculées seulement quand c'est nécessaire.
     private(set) var photoCount = 0
@@ -51,6 +56,28 @@ final class PhotoLibrary {
     @ObservationIgnored private var faceTask: Task<Void, Never>?
     @ObservationIgnored private var faceRefs: FaceReferences?
 
+    // Analyse du contenu (catégories, qualité, empreinte) — analysis.json
+    @ObservationIgnored private(set) var analysis: [String: AnalysisEntry] = [:]
+    private(set) var analysisRevision = 0
+    private(set) var contentDone = 0
+    private(set) var contentTotal = 0
+    private(set) var contentPaused = UserDefaults.standard.bool(forKey: "contentPaused")
+    private(set) var rejectCount = 0
+    @ObservationIgnored private var contentTask: Task<Void, Never>?
+
+    // Photos similaires (calculées à la demande)
+    private(set) var similarGroups: [[String]]?
+    private(set) var similarBest: Set<String> = []
+    private(set) var similarRevision = 0
+    private(set) var isFindingSimilar = false
+
+    // Lieux — places.json
+    @ObservationIgnored private(set) var places: [String: Place] = [:]
+    private(set) var allPlaces: [(name: String, count: Int)] = []
+    private(set) var placeDone = 0
+    private(set) var placeTotal = 0
+    @ObservationIgnored private var placeTask: Task<Void, Never>?
+
     // Import Picasa
     private(set) var picasaFilesFound = 0
     private(set) var picasaImported = false
@@ -73,8 +100,18 @@ final class PhotoLibrary {
 
     init() {
         load()
-        rescan()
+        Task {
+            let (a, p) = await Task.detached(priority: .userInitiated) { (AnalysisStore.load(), PlaceStore.load()) }.value
+            analysis = a
+            places = p
+            recomputeAnalysisDerived()
+            recomputePlaces()
+            rescan()
+        }
     }
+
+    var isAnalyzingContent: Bool { contentTotal > 0 && contentDone < contentTotal }
+    var isFindingPlaces: Bool { placeTotal > 0 && placeDone < placeTotal }
 
     var isReadingExif: Bool { exifTotal > 0 && exifDone < exifTotal }
 
@@ -142,6 +179,7 @@ final class PhotoLibrary {
             if ProcessInfo.processInfo.environment["ALBUMINE_AUTOIMPORT"] != nil { importPicasa() } // tests
             if result.pending.isEmpty {
                 saveIndex()
+                afterExifPass()
             } else {
                 startExifPass(result.pending, generation: generation)
             }
@@ -158,6 +196,7 @@ final class PhotoLibrary {
         recomputeFolders()
         recomputeCounts()
         recomputeMetadataDerived()
+        resort()
         revision += 1
         detectPicasaFiles()
     }
@@ -202,8 +241,16 @@ final class PhotoLibrary {
             saveIndex()
             recomputeFolders()
             recomputeCounts()
+            resort()
             revision += 1 // re-trie une seule fois avec les vraies dates
+            afterExifPass()
         }
+    }
+
+    /// Appelé quand toutes les dates et coordonnées sont lues.
+    private func afterExifPass() {
+        startContentPass()
+        startPlacePass()
     }
 
     private func saveIndex() {
@@ -221,6 +268,10 @@ final class PhotoLibrary {
             .map { FolderSummary(path: $0.key, name: ($0.key as NSString).lastPathComponent,
                                  count: $0.value.count, latest: $0.value.latest) }
             .sorted { $0.latest > $1.latest }
+    }
+
+    private func resort() {
+        byDateNewest = photos.sorted { $0.date > $1.date }
     }
 
     private func recomputeCounts() {
@@ -319,9 +370,19 @@ final class PhotoLibrary {
     }
 
     private func metadataChanged() {
-        save()
+        scheduleSave()
         recomputeMetadataDerived()
-        revision += 1
+        metadataRevision += 1
+    }
+
+    /// Enregistrement différé et hors du fil principal : l'interface ne se bloque plus.
+    private func scheduleSave() {
+        saveTask?.cancel()
+        saveTask = Task {
+            try? await Task.sleep(for: .milliseconds(800))
+            guard !Task.isCancelled else { return }
+            save()
+        }
     }
 
     /// La photo correspond-elle à tous les mots recherchés (déjà normalisés) ?
@@ -332,8 +393,11 @@ final class PhotoLibrary {
             if extra == nil {
                 let year = String(Calendar.current.component(.year, from: photo.date))
                 let m = metadata[photo.id]
-                extra = ([photo.camera ?? "", year, m?.caption ?? ""] + (m?.tags ?? []) + (m?.people ?? []) + (m?.albums ?? []))
+                var text = ([photo.camera ?? "", year, m?.caption ?? ""] + (m?.tags ?? []) + (m?.people ?? []) + (m?.albums ?? []))
                     .joined(separator: " ").searchFolded
+                for label in analysis[photo.id]?.l ?? [] { text += " " + ContentLabels.searchText(label) }
+                if let place = place(of: photo) { text += " " + place.searchText }
+                extra = text
             }
             return extra!.contains(token)
         }
@@ -694,6 +758,221 @@ final class PhotoLibrary {
         metadataChanged()
     }
 
+    // MARK: Analyse du contenu
+
+    func toggleContentPause() {
+        contentPaused.toggle()
+        UserDefaults.standard.set(contentPaused, forKey: "contentPaused")
+        if contentPaused {
+            contentTask?.cancel()
+        } else {
+            startContentPass()
+        }
+    }
+
+    /// Analyse en arrière-plan les photos pas encore analysées (les plus récentes d'abord).
+    /// Remplit au passage le cache de miniatures. Reprend là où elle s'était arrêtée.
+    func startContentPass() {
+        guard contentTask == nil, !contentPaused else { return }
+        let pending = byDateNewest.filter { p in
+            guard let e = analysis[p.id] else { return true }
+            return e.s != p.fileSize || abs(e.m - p.modificationDate.timeIntervalSince1970) >= 1
+        }
+        guard !pending.isEmpty else { return }
+        contentTotal = pending.count
+        contentDone = 0
+        let generation = scanGeneration
+        contentTask = Task {
+            var start = 0
+            var sinceSave = 0
+            while start < pending.count {
+                // Priorité aux miniatures affichées et à l'analyse des visages.
+                while !(await ImageLoader.limiter.isIdle) || isAnalyzingFaces {
+                    try? await Task.sleep(for: .milliseconds(200))
+                    if Task.isCancelled { break }
+                }
+                if Task.isCancelled || generation != scanGeneration { break }
+                let end = min(start + 8, pending.count)
+                let batch = Array(pending[start..<end])
+                let results = await Task.detached(priority: .utility) { () -> [AnalysisEntry] in
+                    var out = [AnalysisEntry](repeating: AnalysisEntry(s: 0, m: 0), count: batch.count)
+                    out.withUnsafeMutableBufferPointer { buffer in
+                        DispatchQueue.concurrentPerform(iterations: batch.count) { i in
+                            buffer[i] = ContentAnalyzer.analyze(batch[i])
+                        }
+                    }
+                    return out
+                }.value
+                for (p, e) in zip(batch, results) { analysis[p.id] = e }
+                contentDone = end
+                start = end
+                sinceSave += batch.count
+                if sinceSave >= 1500 {
+                    sinceSave = 0
+                    saveAnalysis()
+                    recomputeAnalysisDerived()
+                }
+            }
+            saveAnalysis()
+            recomputeAnalysisDerived()
+            if start >= pending.count { contentTotal = 0; contentDone = 0 }
+            contentTask = nil
+        }
+    }
+
+    private func saveAnalysis() {
+        let snapshot = analysis
+        Task.detached(priority: .background) { AnalysisStore.save(snapshot) }
+    }
+
+    private func recomputeAnalysisDerived() {
+        var rejects = 0
+        for (id, e) in analysis where indexByID[id] != nil {
+            if RejectReason.reason(for: e) != nil, !(metadata[id]?.qualityOK ?? false) { rejects += 1 }
+        }
+        rejectCount = rejects
+        analysisRevision += 1
+    }
+
+    func labels(of photo: Photo) -> [String] { analysis[photo.id]?.l ?? [] }
+
+    func rejectReason(of photo: Photo) -> RejectReason? {
+        guard !(metadata[photo.id]?.qualityOK ?? false), let e = analysis[photo.id] else { return nil }
+        return RejectReason.reason(for: e)
+    }
+
+    /// « Ce n'est pas raté » : la photo n'apparaît plus dans les photos ratées.
+    func markQualityOK(_ photos: [Photo]) {
+        for p in photos { metadata[p.id, default: PhotoMetadata()].qualityOK = true }
+        metadataChanged()
+        recomputeAnalysisDerived()
+    }
+
+    /// Score pour choisir la meilleure photo d'une série.
+    func qualityScore(_ id: String) -> Float {
+        guard let e = analysis[id] else { return -10 }
+        return (e.a ?? 0) * 10 + min((e.b ?? 0) / 500, 2) + Float(metadata[id]?.richness ?? 0)
+    }
+
+    // MARK: Photos similaires
+
+    func findSimilar() {
+        guard !isFindingSimilar else { return }
+        let items = photos.compactMap { p -> SimilarFinder.Item? in
+            guard !p.isVideo, let h = analysis[p.id]?.h else { return nil }
+            return SimilarFinder.Item(id: p.id, date: p.date, hash: h)
+        }
+        isFindingSimilar = true
+        Task {
+            let groups = await Task.detached(priority: .userInitiated) { SimilarFinder.groups(items) }.value
+            let ordered = groups.map { g in g.sorted { qualityScore($0) > qualityScore($1) } }
+            similarGroups = ordered.sorted { (photo(id: $0[0])?.date ?? .distantPast) > (photo(id: $1[0])?.date ?? .distantPast) }
+            similarBest = Set(ordered.compactMap(\.first))
+            isFindingSimilar = false
+            similarRevision += 1
+        }
+    }
+
+    var similarExtras: Int { (similarGroups ?? []).reduce(0) { $0 + $1.count - 1 } }
+
+    /// Garde la meilleure photo de chaque série et met les autres à la corbeille
+    /// (notes, personnes et albums reportés sur celle gardée).
+    func trashSimilarExtras() {
+        guard let groups = similarGroups, !isTrashing else { return }
+        let plan = groups.compactMap { g -> (keep: String, others: [(String, URL)])? in
+            guard g.count > 1 else { return nil }
+            return (g[0], g.dropFirst().compactMap { id in photo(id: id).map { (id, $0.url) } })
+        }
+        isTrashing = true
+        Task {
+            let trashed = await Task.detached(priority: .userInitiated) { () -> [(keep: String, copy: String)] in
+                var done: [(String, String)] = []
+                for g in plan {
+                    for (id, url) in g.others where (try? FileManager.default.trashItem(at: url, resultingItemURL: nil)) != nil {
+                        done.append((g.keep, id))
+                    }
+                }
+                return done
+            }.value
+            for t in trashed {
+                if let m = metadata[t.copy] { metadata[t.keep, default: PhotoMetadata()].merge(m); metadata[t.copy] = nil }
+            }
+            let removed = Set(trashed.map(\.copy))
+            removeFromLibrary(removed)
+            similarGroups = groups.map { $0.filter { !removed.contains($0) } }.filter { $0.count > 1 }
+            similarRevision += 1
+            isTrashing = false
+            notice = "\(trashed.count) photos mises à la corbeille ; la meilleure de chaque série est conservée."
+            metadataChanged()
+        }
+    }
+
+    // MARK: Lieux
+
+    func place(of photo: Photo) -> Place? {
+        guard let la = photo.latitude, let lo = photo.longitude,
+              let p = places[PlaceStore.cell(la, lo)], !p.label.isEmpty else { return nil }
+        return p
+    }
+
+    /// Nom court utilisé pour les listes (« Avoriaz »).
+    func placeName(of photo: Photo) -> String? {
+        guard let p = place(of: photo) else { return nil }
+        return p.locality ?? p.area ?? p.country
+    }
+
+    /// Recherche les noms des zones visitées, les plus photographiées d'abord.
+    func startPlacePass() {
+        guard placeTask == nil else { return }
+        var counts: [String: Int] = [:]
+        for p in photos {
+            if let la = p.latitude, let lo = p.longitude { counts[PlaceStore.cell(la, lo), default: 0] += 1 }
+        }
+        let pending = counts.filter { places[$0.key] == nil }.sorted { $0.value > $1.value }.map(\.key)
+        guard !pending.isEmpty else { return }
+        placeTotal = pending.count
+        placeDone = 0
+        placeTask = Task {
+            var i = 0
+            var failures = 0
+            while i < pending.count, !Task.isCancelled {
+                switch await PlaceStore.lookup(pending[i]) {
+                case .found(let place):
+                    places[pending[i]] = place
+                case .nothing:
+                    places[pending[i]] = Place()
+                case .retryLater:
+                    failures += 1
+                    if failures > 20 { break } // hors ligne : on reprendra au prochain lancement
+                    try? await Task.sleep(for: .seconds(60))
+                    continue
+                }
+                failures = 0
+                i += 1
+                placeDone = i
+                if i % 25 == 0 { savePlaces(); recomputePlaces() }
+                try? await Task.sleep(for: .milliseconds(1300)) // limite du service Apple
+            }
+            savePlaces()
+            recomputePlaces()
+            placeTotal = 0
+            placeDone = 0
+            placeTask = nil
+        }
+    }
+
+    private func savePlaces() {
+        let snapshot = places
+        Task.detached(priority: .background) { PlaceStore.save(snapshot) }
+    }
+
+    private func recomputePlaces() {
+        var counts: [String: Int] = [:]
+        for p in photos { if let n = placeName(of: p) { counts[n, default: 0] += 1 } }
+        allPlaces = counts.map { (name: $0.key, count: $0.value) }.sorted { $0.count > $1.count }
+        analysisRevision += 1
+    }
+
     // MARK: Persistance
 
     private func load() {
@@ -713,9 +992,13 @@ final class PhotoLibrary {
     }
 
     private func save() {
-        let store = Store(roots: roots.map(\.path), metadata: metadata.filter { !$0.value.isEmpty },
+        let store = Store(roots: roots.map(\.path), metadata: metadata,
                           picasaImported: picasaImported, albums: albumNames)
-        let encoder = JSONEncoder()
-        if let data = try? encoder.encode(store) { try? data.write(to: storeURL, options: .atomic) }
+        let url = storeURL
+        Task.detached(priority: .utility) {
+            var s = store
+            s.metadata = s.metadata.filter { !$0.value.isEmpty }
+            if let data = try? JSONEncoder().encode(s) { try? data.write(to: url, options: .atomic) }
+        }
     }
 }

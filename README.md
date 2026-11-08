@@ -31,7 +31,19 @@ Fonctionne avec les seuls Command Line Tools (Xcode non requis). macOS 14 minimu
 - **Doublons** : copies identiques (même taille + empreinte, puis comparaison octet par octet avant
   suppression) ; la copie la plus annotée est gardée, les autres vont **à la corbeille** (récupérables)
   et leurs notes, personnes et albums sont reportés
-- **Recherche** : nom, dossier, personne, album, étiquette, légende, appareil, année (sans accents)
+- **Recherche par contenu** : « plage », « neige », « chien », « gâteau d'anniversaire »… (1 300 catégories
+  reconnues par Vision, en français) — analyse en arrière-plan, mise en pause possible, tout reste sur le Mac
+- **Lieux** : noms des villes et pays d'après le GPS (géocodage Apple, une zone d'environ 2 km à la fois),
+  section « Lieux », recherche par lieu
+- **Événements automatiques** : regroupement « Par événement » (coupure après 6 h, ou 1 h et 40 km),
+  titrés par le lieu le plus fréquent
+- **Photos similaires** : rafales et versions redimensionnées (empreinte perceptive + proximité dans le temps) ;
+  « Garder la meilleure de chaque série » (la plus réussie selon Vision et vos annotations)
+- **Photos ratées** : floues, trop sombres, surexposées, captures d'écran et documents, peu réussies ;
+  « Ce n'est pas raté » pour les écarter de la liste
+- **Diaporama** plein écran (fondu, léger zoom, musique au choix ; Espace, ← →, Échap)
+- **Export** (taille, qualité, rotation, retrait du GPS) et **Partager** (Mail, Messages, AirDrop…)
+- **Recherche** : nom, dossier, personne, album, étiquette, légende, contenu, lieu, appareil, année (sans accents)
 - **Inspecteur** : EXIF (date, dimensions, appareil, objectif, réglages, GPS → Plans), visages, personnes, albums
 - **Grandes photothèques** : listage immédiat, métadonnées lues en arrière-plan, index persistant,
   cache disque des miniatures, lecture du disque limitée pour garder la grille fluide
@@ -57,6 +69,8 @@ retouches (`filters=`) et dossiers cachés `Originals` (copies avant retouche).
 - `~/Library/Application Support/Albumine/library.json` : dossiers suivis, notes, étiquettes, personnes, albums…
 - `~/Library/Application Support/Albumine/index.json` : index des fichiers et EXIF
 - `~/Library/Application Support/Albumine/faceprints.dat` : empreintes des visages d'exemple
+- `~/Library/Application Support/Albumine/analysis.json` : analyse du contenu (catégories, qualité, empreintes)
+- `~/Library/Application Support/Albumine/places.json` : noms des lieux
 - `~/Library/Caches/Albumine/Miniatures` : miniatures (peut être supprimé)
 
 Variables utiles au développement : `ALBUMINE_HOME` (autre dossier de données), `ALBUMINE_DEBUG` (journal sur stderr),

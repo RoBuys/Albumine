@@ -40,12 +40,14 @@ struct PhotoMetadata: Codable, Equatable {
     var faces: [FaceRegion] = []
     /// La détection des visages a déjà été faite sur cette photo.
     var facesAnalyzed = false
+    /// L'utilisateur a indiqué que la photo n'est pas ratée.
+    var qualityOK = false
 
     init() {}
 
     var isEmpty: Bool {
         rating == 0 && tags.isEmpty && people.isEmpty && albums.isEmpty
-            && caption.isEmpty && rotation == 0 && faces.isEmpty && !facesAnalyzed
+            && caption.isEmpty && rotation == 0 && faces.isEmpty && !facesAnalyzed && !qualityOK
     }
 
     /// Nombre d'informations saisies (sert à choisir quelle copie garder parmi des doublons).
@@ -53,7 +55,7 @@ struct PhotoMetadata: Codable, Equatable {
 
     var hasUnnamedFaces: Bool { faces.contains { $0.name == nil } }
 
-    private enum CodingKeys: String, CodingKey { case rating, tags, people, albums, caption, rotation, faces, facesAnalyzed }
+    private enum CodingKeys: String, CodingKey { case rating, tags, people, albums, caption, rotation, faces, facesAnalyzed, qualityOK }
 
     // Champs facultatifs : les anciens fichiers restent lisibles, les champs vides ne sont pas écrits.
     init(from decoder: Decoder) throws {
@@ -66,6 +68,7 @@ struct PhotoMetadata: Codable, Equatable {
         rotation = try c.decodeIfPresent(Int.self, forKey: .rotation) ?? 0
         faces = try c.decodeIfPresent([FaceRegion].self, forKey: .faces) ?? []
         facesAnalyzed = try c.decodeIfPresent(Bool.self, forKey: .facesAnalyzed) ?? false
+        qualityOK = try c.decodeIfPresent(Bool.self, forKey: .qualityOK) ?? false
     }
 
     func encode(to encoder: Encoder) throws {
@@ -78,6 +81,7 @@ struct PhotoMetadata: Codable, Equatable {
         if rotation != 0 { try c.encode(rotation, forKey: .rotation) }
         if !faces.isEmpty { try c.encode(faces, forKey: .faces) }
         if facesAnalyzed { try c.encode(true, forKey: .facesAnalyzed) }
+        if qualityOK { try c.encode(true, forKey: .qualityOK) }
     }
 
     /// Fusion d'une copie dans la photo gardée (doublons).
@@ -154,6 +158,9 @@ enum SidebarItem: Hashable {
     case videos
     case duplicates
     case map
+    case similar
+    case rejects
+    case place(String)
 }
 
 enum PhotoGrouping: String, CaseIterable, Identifiable {
@@ -161,6 +168,7 @@ enum PhotoGrouping: String, CaseIterable, Identifiable {
     case folder = "Par dossier"
     case month = "Par mois"
     case year = "Par année"
+    case event = "Par événement"
     var id: String { rawValue }
 }
 

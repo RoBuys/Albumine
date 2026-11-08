@@ -30,6 +30,22 @@ struct SidebarView: View {
                 Label("Doublons", systemImage: "square.on.square")
                     .badge(library.duplicateGroups.map { $0.count } ?? 0)
                     .tag(SidebarItem.duplicates)
+                Label("Photos similaires", systemImage: "square.stack.3d.down.right")
+                    .badge(library.similarGroups.map { $0.count } ?? 0)
+                    .tag(SidebarItem.similar)
+                Label("Photos ratées", systemImage: "hand.thumbsdown")
+                    .badge(library.rejectCount)
+                    .tag(SidebarItem.rejects)
+            }
+
+            if !library.allPlaces.isEmpty {
+                Section("Lieux") {
+                    ForEach(library.allPlaces.prefix(40), id: \.name) { place in
+                        Label(place.name, systemImage: "mappin.and.ellipse")
+                            .badge(place.count)
+                            .tag(SidebarItem.place(place.name))
+                    }
+                }
             }
 
             Section("Personnes") {
@@ -156,6 +172,26 @@ struct SidebarView: View {
             if library.isFindingDuplicates {
                 progressRow("Doublons \(library.duplicateDone.formatted()) / \(library.duplicateTotal.formatted())",
                             value: Double(library.duplicateDone) / Double(max(library.duplicateTotal, 1)))
+            }
+            if library.isAnalyzingContent || library.contentPaused {
+                HStack {
+                    if library.contentPaused {
+                        Text("Analyse du contenu en pause").font(.caption2).foregroundStyle(.secondary)
+                    } else {
+                        progressRow("Contenu \(library.contentDone.formatted()) / \(library.contentTotal.formatted())",
+                                    value: Double(library.contentDone) / Double(max(library.contentTotal, 1)))
+                    }
+                    Button { library.toggleContentPause() } label: {
+                        Image(systemName: library.contentPaused ? "play.circle" : "pause.circle")
+                    }
+                    .buttonStyle(.borderless)
+                    .help(library.contentPaused ? "Reprendre l'analyse du contenu" : "Mettre l'analyse du contenu en pause")
+                }
+            }
+            if library.isFindingPlaces {
+                progressRow("Lieux \(library.placeDone.formatted()) / \(library.placeTotal.formatted())",
+                            value: Double(library.placeDone) / Double(max(library.placeTotal, 1)))
+                    .help("Recherche des noms de lieux (service Apple, une zone à la fois).")
             }
             if library.isTrashing {
                 progressRow("Mise à la corbeille…", value: nil)

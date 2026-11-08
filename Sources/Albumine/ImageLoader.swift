@@ -83,6 +83,16 @@ enum ImageLoader {
         return image
     }
 
+    /// Miniature 512 px non pivotée, depuis le cache disque ou en la créant (fil d'arrière-plan).
+    /// L'analyse du contenu remplit ainsi le cache : la grille devient plus rapide ensuite.
+    static func diskThumbnail(_ url: URL) -> CGImage? {
+        let cacheFile = diskCacheURL(for: url)
+        if let cacheFile, let cg = readImage(cacheFile) { return cg }
+        guard let cg = ImageDecoding.decode(url, maxPixel: thumbnailPixels) else { return nil }
+        if let cacheFile { writeJPEG(cg, to: cacheFile) }
+        return cg
+    }
+
     private static func nsImage(_ cg: CGImage) -> NSImage {
         NSImage(cgImage: cg, size: NSSize(width: cg.width, height: cg.height))
     }

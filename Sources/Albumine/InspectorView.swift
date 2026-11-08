@@ -26,6 +26,7 @@ struct InspectorView: View {
                     peopleSection
                     albumsSection
                     tagsSection
+                    if photos.count == 1 { contentSection(photos[0]) }
                     if photos.count == 1 { infoSection(photos[0]) }
                     Button {
                         NSWorkspace.shared.activateFileViewerSelecting(photos.map(\.url))
@@ -218,6 +219,38 @@ struct InspectorView: View {
         }
     }
 
+    @ViewBuilder
+    private func contentSection(_ photo: Photo) -> some View {
+        let labels = library.labels(of: photo)
+        let reason = library.rejectReason(of: photo)
+        if !labels.isEmpty || reason != nil {
+            VStack(alignment: .leading, spacing: 8) {
+                sectionTitle("Contenu reconnu")
+                if !labels.isEmpty {
+                    FlowLayout {
+                        ForEach(labels, id: \.self) { id in
+                            Text(ContentLabels.french(id))
+                                .font(.caption)
+                                .padding(.horizontal, 7)
+                                .padding(.vertical, 2)
+                                .background(.quaternary, in: Capsule())
+                        }
+                    }
+                }
+                if let reason {
+                    HStack {
+                        Label("Semble ratée : \(reason.rawValue.lowercased())", systemImage: "hand.thumbsdown")
+                            .font(.caption).foregroundStyle(.orange)
+                        Spacer()
+                        Button("Ce n'est pas raté") { library.markQualityOK([photo]) }
+                            .font(.caption)
+                            .buttonStyle(.borderless)
+                    }
+                }
+            }
+        }
+    }
+
     private func infoSection(_ photo: Photo) -> some View {
         VStack(alignment: .leading, spacing: 6) {
             sectionTitle("Informations")
@@ -231,6 +264,7 @@ struct InspectorView: View {
                 if let camera = info?.camera { row("Appareil", camera) }
                 if let lens = info?.lens { row("Objectif", lens) }
                 if let settings = shootingSettings { row("Réglages", settings) }
+                if let place = library.place(of: photo) { row("Lieu", place.label) }
                 row("Dossier", photo.folderName)
             }
             .font(.callout)
