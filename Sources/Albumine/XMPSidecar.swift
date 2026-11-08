@@ -17,6 +17,8 @@ enum XMPSidecar {
         var caption = ""
         var latitude: Double?
         var longitude: Double?
+        /// Date de prise de vue corrigée dans Albumine.
+        var date: Date?
         /// Zones nommées (lecture seulement : MWG Regions, centre + taille).
         var regions: [FaceRegion] = []
     }
@@ -164,6 +166,13 @@ enum XMPSidecar {
             CGImageMetadataSetValueMatchingImageProperty(meta, kCGImagePropertyGPSDictionary, kCGImagePropertyGPSLatitudeRef, (lat < 0 ? "S" : "N") as CFString)
             CGImageMetadataSetValueMatchingImageProperty(meta, kCGImagePropertyGPSDictionary, kCGImagePropertyGPSLongitude, abs(lon) as CFNumber)
             CGImageMetadataSetValueMatchingImageProperty(meta, kCGImagePropertyGPSDictionary, kCGImagePropertyGPSLongitudeRef, (lon < 0 ? "W" : "E") as CFString)
+        }
+        if let date = c.date {
+            let f = DateFormatter()
+            f.locale = Locale(identifier: "en_US_POSIX")
+            f.dateFormat = "yyyy:MM:dd HH:mm:ss"
+            CGImageMetadataSetValueMatchingImageProperty(meta, kCGImagePropertyExifDictionary,
+                                                         kCGImagePropertyExifDateTimeOriginal, f.string(from: date) as CFString)
         }
         CGImageMetadataSetValueWithPath(meta, nil, "albumine:version" as CFString, "1" as CFString)
 

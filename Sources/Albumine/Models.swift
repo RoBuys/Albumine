@@ -25,7 +25,11 @@ struct Photo: Identifiable, Hashable {
     var name: String { url.lastPathComponent }
     var folderName: String { (folderPath as NSString).lastPathComponent }
     /// Date de prise de vue si connue, sinon date de modification du fichier.
-    var date: Date { captureDate ?? modificationDate }
+    /// Date corrigée par l'utilisateur (prioritaire).
+    var dateOverride: Date?
+    var date: Date { dateOverride ?? captureDate ?? modificationDate }
+    /// Date d'origine (fichier), avant correction.
+    var originalDate: Date { captureDate ?? modificationDate }
     var hasLocation: Bool { latitude != nil && longitude != nil }
 }
 
@@ -49,12 +53,14 @@ struct PhotoMetadata: Codable, Equatable {
     var lon: Double?
     /// Retouches non destructives.
     var edits: PhotoEdits?
+    /// Date corrigée (secondes depuis 1970).
+    var date: Double?
 
     init() {}
 
     var isEmpty: Bool {
         rating == 0 && tags.isEmpty && people.isEmpty && albums.isEmpty
-            && caption.isEmpty && rotation == 0 && faces.isEmpty && !facesAnalyzed && !qualityOK && lat == nil && (edits?.isIdentity ?? true)
+            && caption.isEmpty && rotation == 0 && faces.isEmpty && !facesAnalyzed && !qualityOK && lat == nil && (edits?.isIdentity ?? true) && date == nil
     }
 
     /// Nombre d'informations saisies (sert à choisir quelle copie garder parmi des doublons).
@@ -62,7 +68,7 @@ struct PhotoMetadata: Codable, Equatable {
 
     var hasUnnamedFaces: Bool { faces.contains { $0.name == nil } }
 
-    private enum CodingKeys: String, CodingKey { case rating, tags, people, albums, caption, rotation, faces, facesAnalyzed, qualityOK, lat, lon, edits }
+    private enum CodingKeys: String, CodingKey { case rating, tags, people, albums, caption, rotation, faces, facesAnalyzed, qualityOK, lat, lon, edits, date }
 
     // Champs facultatifs : les anciens fichiers restent lisibles, les champs vides ne sont pas écrits.
     init(from decoder: Decoder) throws {
@@ -79,6 +85,7 @@ struct PhotoMetadata: Codable, Equatable {
         lat = try c.decodeIfPresent(Double.self, forKey: .lat)
         lon = try c.decodeIfPresent(Double.self, forKey: .lon)
         edits = try c.decodeIfPresent(PhotoEdits.self, forKey: .edits)
+        date = try c.decodeIfPresent(Double.self, forKey: .date)
     }
 
     func encode(to encoder: Encoder) throws {
@@ -95,6 +102,7 @@ struct PhotoMetadata: Codable, Equatable {
         try c.encodeIfPresent(lat, forKey: .lat)
         try c.encodeIfPresent(lon, forKey: .lon)
         if let edits, !edits.isIdentity { try c.encode(edits, forKey: .edits) }
+        try c.encodeIfPresent(date, forKey: .date)
     }
 
     /// Fusion d'une copie dans la photo gardée (doublons).
@@ -108,6 +116,7 @@ struct PhotoMetadata: Codable, Equatable {
         if faces.isEmpty { faces = other.faces; facesAnalyzed = facesAnalyzed || other.facesAnalyzed }
         if lat == nil { lat = other.lat; lon = other.lon }
         if edits == nil { edits = other.edits }
+        if date == nil { date = other.date }
     }
 }
 
@@ -177,6 +186,7 @@ enum SidebarItem: Hashable {
     case rejects
     case place(String)
     case memories
+    case damaged
 }
 
 enum PhotoGrouping: String, CaseIterable, Identifiable {

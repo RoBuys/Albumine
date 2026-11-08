@@ -11,6 +11,8 @@ struct SidebarView: View {
     @Etat private var renamingAlbum: String?
     @Etat private var deletingAlbum: String?
     @Etat private var albumName = ""
+    @Etat private var renamingPerson: String?
+    @Etat private var personName = ""
 
     var body: some View {
         List(selection: $selection) {
@@ -41,6 +43,11 @@ struct SidebarView: View {
                 Label("Photos ratées", systemImage: "hand.thumbsdown")
                     .badge(library.rejectCount)
                     .tag(SidebarItem.rejects)
+                if !library.damaged.isEmpty {
+                    Label("Fichiers abîmés", systemImage: "exclamationmark.triangle")
+                        .badge(library.damaged.count)
+                        .tag(SidebarItem.damaged)
+                }
             }
 
             if !library.allPlaces.isEmpty {
@@ -57,10 +64,26 @@ struct SidebarView: View {
                 Label("Visages à nommer", systemImage: "person.crop.circle.badge.questionmark")
                     .badge(library.unnamedFaceCount)
                     .tag(SidebarItem.unnamedFaces)
-                ForEach(library.allPeople, id: \.name) { person in
-                    Label(person.name, systemImage: "person.crop.circle")
+                ForEach(library.visiblePeople, id: \.name) { person in
+                    personRow(person.name)
                         .badge(person.count)
                         .tag(SidebarItem.person(person.name))
+                        .contextMenu {
+                            Button("Renommer…") { personName = person.name; renamingPerson = person.name }
+                            Menu("Fusionner avec") {
+                                ForEach(library.allPeople.map(\.name).filter { $0 != person.name }, id: \.self) { other in
+                                    Button(other) {
+                                        if selection == .person(person.name) { selection = .person(other) }
+                                        library.renamePerson(person.name, to: other)
+                                    }
+                                }
+                            }
+                            Divider()
+                            Button("Masquer de la barre latérale") {
+                                if selection == .person(person.name) { selection = .all }
+                                library.setHidden(person.name, true)
+                            }
+                        }
                 }
             }
 
@@ -141,6 +164,21 @@ struct SidebarView: View {
         }
         .listStyle(.sidebar)
         .safeAreaInset(edge: .bottom) { status }
+        .alert("Renommer la personne", isPresented: Binding(get: { renamingPerson != nil },
+                                                             set: { if !$0 { renamingPerson = nil } })) {
+            TextField("Prénom Nom", text: $personName)
+            Button("Renommer") {
+                if let old = renamingPerson {
+                    let new = personName.trimmingCharacters(in: .whitespaces)
+                    library.renamePerson(old, to: new)
+                    if selection == .person(old) { selection = .person(new) }
+                }
+                renamingPerson = nil
+            }
+            Button("Annuler", role: .cancel) { renamingPerson = nil }
+        } message: {
+            Text("Si ce nom existe déjà, les deux personnes seront fusionnées.")
+        }
         .alert("Nouvel album", isPresented: $creatingAlbum) {
             TextField("Nom de l'album", text: $albumName)
             Button("Créer") { library.createAlbum(albumName) }
@@ -212,6 +250,22 @@ struct SidebarView: View {
                             value: Double(library.placeDone) / Double(max(library.placeTotal, 1)))
                     .help("Recherche des noms de lieux (service Apple, une zone à la fois).")
             }
+            if library.isCheckingIntegrity {
+                HStack {
+                    progressRow("Vérification \(library.integrityDone.formatted()) / \(library.integrityTotal.formatted())",
+                                value: Double(library.integrityDone) / Double(max(library.integrityTotal, 1)))
+                    Button { library.cancelIntegrityCheck() } label: { Image(systemName: "stop.circle") }
+                        .buttonStyle(.borderless)
+                }
+            }
+            if library.isBackingUp, let plan = library.backupPlan {
+                HStack {
+                    progressRow("Sauvegarde \(ByteCountFormatter.string(fromByteCount: library.backupBytesDone, countStyle: .file)) / \(ByteCountFormatter.string(fromByteCount: plan.totalBytes, countStyle: .file))",
+                                value: Double(library.backupBytesDone) / Double(max(plan.totalBytes, 1)))
+                    Button { library.cancelBackup() } label: { Image(systemName: "stop.circle") }
+                        .buttonStyle(.borderless)
+                }
+            }
             if library.isWritingXMP {
                 progressRow("Écriture des fichiers XMP…", value: nil)
             }
@@ -253,6 +307,20 @@ struct SidebarView: View {
         }
         .padding(10)
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    @ViewBuilder
+    private func personRow(_ name: String) -> some View {
+        HStack(spacing: 6) {
+            if let c = library.cover(of: name) {
+                FaceCropView(url: c.photo.url, rect: c.rect, rotation: c.rotation)
+                    .frame(width: 20, height: 20)
+                    .clipShape(Circle())
+            } else {
+                Image(systemName: "person.crop.circle").frame(width: 20)
+            }
+            Text(name).lineLimit(1)
+        }
     }
 
     private func progressRow(_ text: String, value: Double?) -> some View {

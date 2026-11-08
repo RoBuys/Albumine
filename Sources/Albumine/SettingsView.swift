@@ -7,10 +7,14 @@ struct SettingsView: View {
         TabView {
             FoldersSettings()
                 .tabItem { Label("Dossiers", systemImage: "folder") }
+            PeopleSettings()
+                .tabItem { Label("Personnes", systemImage: "person.2") }
+            BackupSettings()
+                .tabItem { Label("Sauvegarde", systemImage: "externaldrive.badge.timemachine") }
             OptionsSettings()
                 .tabItem { Label("Options", systemImage: "gearshape") }
         }
-        .frame(width: 620, height: 500)
+        .frame(width: 640, height: 540)
     }
 }
 
@@ -182,5 +186,158 @@ struct OptionsSettings: View {
             }
         }
         .formStyle(.grouped)
+    }
+}
+
+/// Personnes : doublons à fusionner, renommage, personnes masquées.
+struct PeopleSettings: View {
+    @Environment(PhotoLibrary.self) private var library
+    @Etat private var renaming: String?
+    @Etat private var newName = ""
+
+    var body: some View {
+        Form {
+            Section("Doublons probables") {
+                let pairs = library.duplicatePeople
+                if pairs.isEmpty {
+                    Text("Aucun doublon détecté.").foregroundStyle(.secondary)
+                } else {
+                    Text("Même nom à la casse ou aux accents près, ou prénom seul d'un nom complet. Vérifiez avant de fusionner : deux personnes différentes peuvent avoir le même prénom.")
+                        .font(.caption).foregroundStyle(.secondary)
+                    ForEach(pairs, id: \.from) { pair in
+                        HStack {
+                            personLabel(pair.from)
+                            Image(systemName: "arrow.right").foregroundStyle(.secondary)
+                            personLabel(pair.into)
+                            Spacer()
+                            Button("Fusionner") { library.renamePerson(pair.from, to: pair.into) }
+                        }
+                    }
+                }
+            }
+            Section("Toutes les personnes") {
+                ForEach(library.allPeople, id: \.name) { p in
+                    HStack {
+                        personLabel(p.name)
+                        Spacer()
+                        Text("\(p.count.formatted()) photos").font(.caption).foregroundStyle(.secondary)
+                        Button("Renommer…") { newName = p.name; renaming = p.name }
+                            .buttonStyle(.borderless)
+                        Toggle("Visible", isOn: Binding(get: { !library.hiddenPeople.contains(p.name) },
+                                                        set: { library.setHidden(p.name, !$0) }))
+                            .toggleStyle(.checkbox)
+                            .help("Afficher dans la barre latérale")
+                    }
+                }
+            }
+        }
+        .formStyle(.grouped)
+        .alert("Renommer la personne", isPresented: Binding(get: { renaming != nil }, set: { if !$0 { renaming = nil } })) {
+            TextField("Prénom Nom", text: $newName)
+            Button("Renommer") {
+                if let old = renaming { library.renamePerson(old, to: newName) }
+                renaming = nil
+            }
+            Button("Annuler", role: .cancel) { renaming = nil }
+        } message: {
+            Text("Si ce nom existe déjà, les deux personnes seront fusionnées.")
+        }
+    }
+
+    private func personLabel(_ name: String) -> some View {
+        HStack(spacing: 6) {
+            if let c = library.cover(of: name) {
+                FaceCropView(url: c.photo.url, rect: c.rect, rotation: c.rotation)
+                    .frame(width: 24, height: 24)
+                    .clipShape(Circle())
+            } else {
+                Image(systemName: "person.crop.circle").font(.title3).foregroundStyle(.secondary)
+            }
+            Text(name)
+            if let n = library.allPeople.first(where: { $0.name == name })?.count {
+                Text("(\(n))").font(.caption).foregroundStyle(.secondary)
+            }
+        }
+    }
+}
+
+/// Sauvegarde vers un second disque et contrôle d'intégrité.
+struct BackupSettings: View {
+    @Environment(PhotoLibrary.self) private var library
+
+    var body: some View {
+        Form {
+            Section("Sauvegarde") {
+                LabeledContent("Destination") {
+                    HStack {
+                        Text(library.backupDestination?.path ?? "Aucune")
+                            .lineLimit(1).truncationMode(.middle)
+                            .foregroundStyle(library.backupDestination == nil ? .secondary : .primary)
+                        Button("Choisir…") { library.chooseBackupDestination() }
+                            .disabled(library.isBackingUp)
+                    }
+                }
+                if library.backupOnSameVolume {
+                    Label("La destination est sur le même disque que les photos : elle ne protège pas d'une panne de ce disque.",
+                          systemImage: "exclamationmark.triangle")
+                        .font(.caption).foregroundStyle(.orange)
+                }
+                LabeledContent("Dernière sauvegarde") {
+                    Text(library.lastBackup.map { $0.formatted(date: .long, time: .shortened) } ?? "Jamais")
+                }
+                if library.isPlanningBackup {
+                    HStack { ProgressView().controlSize(.small); Text("Comparaison avec la sauvegarde…").font(.caption) }
+                } else if let plan = library.backupPlan {
+                    LabeledContent("À copier") {
+                        Text(plan.files.isEmpty ? "Rien : la sauvegarde est à jour (\(plan.upToDate.formatted()) fichiers)"
+                             : "\(plan.files.count.formatted()) fichiers · \(ByteCountFormatter.string(fromByteCount: plan.totalBytes, countStyle: .file))")
+                    }
+                }
+                if library.isBackingUp, let plan = library.backupPlan {
+                    ProgressView(value: Double(library.backupBytesDone), total: Double(max(plan.totalBytes, 1))) {
+                        Text("\(library.backupFilesDone.formatted()) / \(plan.files.count.formatted()) fichiers").font(.caption)
+                    }
+                }
+                HStack {
+                    Button("Vérifier") { library.planBackup() }
+                        .disabled(library.backupDestination == nil || library.isPlanningBackup || library.isBackingUp)
+                    Spacer()
+                    if library.isBackingUp {
+                        Button("Arrêter") { library.cancelBackup() }
+                    } else {
+                        Button("Sauvegarder maintenant") { library.startBackup() }
+                            .buttonStyle(.borderedProminent)
+                            .disabled(library.backupPlan?.files.isEmpty ?? true)
+                    }
+                }
+                Text("Copie les photos, vidéos, XMP et fichiers Picasa manquants ou modifiés (en gardant l'arborescence), ainsi que les données d'Albumine. Rien n'est jamais supprimé de la sauvegarde. Peut être interrompue et reprise.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            Section("Intégrité des fichiers") {
+                LabeledContent("Dernière vérification") {
+                    Text(library.lastIntegrityCheck.map { $0.formatted(date: .long, time: .shortened) } ?? "Jamais")
+                }
+                LabeledContent("Fichiers à problème") {
+                    Text(library.damaged.isEmpty ? "Aucun" : "\(library.damaged.count) (voir « Fichiers abîmés » dans la barre latérale)")
+                }
+                if library.isCheckingIntegrity {
+                    ProgressView(value: Double(library.integrityDone), total: Double(max(library.integrityTotal, 1))) {
+                        Text("\(library.integrityDone.formatted()) / \(library.integrityTotal.formatted())").font(.caption)
+                    }
+                }
+                HStack {
+                    Spacer()
+                    if library.isCheckingIntegrity {
+                        Button("Arrêter") { library.cancelIntegrityCheck() }
+                    } else {
+                        Button("Vérifier tous les fichiers") { library.checkIntegrity() }
+                    }
+                }
+                Text("Détecte les fichiers vides, tronqués (copie interrompue, disque défaillant) ou illisibles. À faire avant une sauvegarde : un fichier abîmé se récupère dans une autre copie.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+        }
+        .formStyle(.grouped)
+        .onAppear { if library.backupPlan == nil { library.planBackup() } }
     }
 }

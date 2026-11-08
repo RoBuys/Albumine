@@ -102,6 +102,14 @@ final class FaceReferences: @unchecked Sendable {
 
     func remove(_ name: String) { lock.withLock { prints[name] = nil } }
 
+    /// Fusionne les exemples d'une personne dans une autre (renommage / fusion).
+    func rename(_ old: String, to new: String) {
+        lock.withLock {
+            guard let moved = prints.removeValue(forKey: old) else { return }
+            prints[new, default: []] += moved
+        }
+    }
+
     /// Personne la plus proche : (nom, distance), si sous le seuil.
     func bestMatch(for print: VNFeaturePrintObservation) -> (name: String, distance: Double)? {
         let snapshot = lock.withLock { prints }

@@ -10,6 +10,29 @@ final class PhotoLibrary {
     private(set) var roots: [URL] = []
     /// Sous-dossiers exclus de l'analyse (chemins complets).
     private(set) var excludedPaths: [String] = []
+    /// Personnes masquées de la barre latérale.
+    private(set) var hiddenPeople: Set<String> = []
+    /// Photo de profil choisie : nom → « identifiant photo#indice du visage ».
+    private(set) var personCovers: [String: String] = [:]
+    /// Photo de profil par défaut (plus grand visage nommé) : nom → (photo, visage).
+    @ObservationIgnored private(set) var defaultCovers: [String: (String, Int)] = [:]
+
+    // Intégrité des fichiers
+    private(set) var damaged: [String: String] = [:]   // identifiant → problème
+    private(set) var integrityDone = 0
+    private(set) var integrityTotal = 0
+    private(set) var lastIntegrityCheck: Date?
+    @ObservationIgnored private var integrityTask: Task<Void, Never>?
+
+    // Sauvegarde
+    private(set) var backupDestination: URL? = UserDefaults.standard.string(forKey: "backupDestination").map { URL(fileURLWithPath: $0) }
+    private(set) var lastBackup: Date? = UserDefaults.standard.object(forKey: "lastBackup") as? Date
+    private(set) var backupPlan: BackupPlan?
+    private(set) var isPlanningBackup = false
+    private(set) var backupBytesDone: Int64 = 0
+    private(set) var backupFilesDone = 0
+    private(set) var isBackingUp = false
+    @ObservationIgnored private var backupTask: Task<Void, Never>?
     /// Toutes les photos. Modifié par lots pendant la lecture des EXIF :
     /// évitez de le lire dans un `body` (préférez `revision`, `photoCount`, `photo(id:)`).
     private(set) var photos: [Photo] = []
@@ -121,6 +144,10 @@ final class PhotoLibrary {
         var picasaImported: Bool?
         var albums: [String]?
         var excluded: [String]?
+        var hiddenPeople: [String]?
+        var personCovers: [String: String]?
+        var damaged: [String: String]?
+        var lastIntegrityCheck: Date?
     }
 
     init() {
@@ -277,9 +304,12 @@ final class PhotoLibrary {
         var newPhotos = incoming
         // Lieux ajoutés à la main.
         for i in newPhotos.indices {
-            if let m = metadata[newPhotos[i].id], let la = m.lat, let lo = m.lon {
-                newPhotos[i].latitude = la
-                newPhotos[i].longitude = lo
+            if let m = metadata[newPhotos[i].id] {
+                if let la = m.lat, let lo = m.lon {
+                    newPhotos[i].latitude = la
+                    newPhotos[i].longitude = lo
+                }
+                newPhotos[i].dateOverride = m.date.map { Date(timeIntervalSince1970: $0) }
             }
         }
         ImageLoader.registerSignatures(newPhotos)
@@ -401,6 +431,7 @@ final class PhotoLibrary {
     }
 
     private func recomputeMetadataDerived() {
+        var covers: [String: (String, Int, Double)] = [:]
         var tagCounts: [String: Int] = [:]
         var peopleCounts: [String: Int] = [:]
         var albumCounts: [String: Int] = Dictionary(uniqueKeysWithValues: albumNames.map { ($0, 0) })
@@ -411,6 +442,9 @@ final class PhotoLibrary {
             if m.hasUnnamedFaces { unnamed += 1 }
             for t in m.tags { tagCounts[t, default: 0] += 1 }
             for p in m.people { peopleCounts[p, default: 0] += 1 }
+            for (i, f) in m.faces.enumerated() where f.w > 0 {
+                if let n = f.name, f.w > (covers[n]?.2 ?? 0) { covers[n] = (path, i, f.w) }
+            }
             for a in m.albums { albumCounts[a, default: 0] += 1 }
         }
         func sorted(_ counts: [String: Int]) -> [(name: String, count: Int)] {
@@ -420,6 +454,7 @@ final class PhotoLibrary {
         starredCount = starred
         unnamedFaceCount = unnamed
         allTags = sorted(tagCounts)
+        defaultCovers = covers.mapValues { ($0.0, $0.1) }
         allPeople = sorted(peopleCounts)
         allAlbums = sorted(albumCounts)
     }
@@ -1202,11 +1237,12 @@ final class PhotoLibrary {
     private func xmpContent(_ id: String) -> XMPSidecar.Content {
         let m = metadata[id]
         return XMPSidecar.Content(rating: m?.rating ?? 0, tags: m?.tags ?? [], people: m?.people ?? [],
-                                  caption: m?.caption ?? "", latitude: m?.lat, longitude: m?.lon)
+                                  caption: m?.caption ?? "", latitude: m?.lat, longitude: m?.lon,
+                                  date: m?.date.map { Date(timeIntervalSince1970: $0) })
     }
 
     private func signature(_ c: XMPSidecar.Content) -> String {
-        "\(c.rating)|\(c.tags.joined(separator: ","))|\(c.people.joined(separator: ","))|\(c.caption)|\(c.latitude ?? 0),\(c.longitude ?? 0)"
+        "\(c.rating)|\(c.tags.joined(separator: ","))|\(c.people.joined(separator: ","))|\(c.caption)|\(c.latitude ?? 0),\(c.longitude ?? 0)|\(c.date?.timeIntervalSince1970 ?? 0)"
     }
 
     private func scheduleXMPWrite(immediately: Bool = false) {
@@ -1301,6 +1337,282 @@ final class PhotoLibrary {
         UserDefaults.standard.set(true, forKey: "xmpImported")
     }
 
+    // MARK: Gestion des personnes
+
+    /// Renomme une personne partout (photos, visages, exemples de reconnaissance).
+    /// Si le nouveau nom existe déjà, les deux personnes sont fusionnées.
+    func renamePerson(_ old: String, to raw: String) {
+        let new = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !new.isEmpty, new != old else { return }
+        for key in metadata.keys {
+            guard var m = metadata[key] else { continue }
+            var changed = false
+            if m.people.contains(old) {
+                m.people = m.people.map { $0 == old ? new : $0 }
+                m.people = m.people.enumerated().filter { m.people.firstIndex(of: $0.element) == $0.offset }.map(\.element)
+                m.people.sort { $0.localizedStandardCompare($1) == .orderedAscending }
+                changed = true
+            }
+            for i in m.faces.indices {
+                if m.faces[i].name == old { m.faces[i].name = new; changed = true }
+                if m.faces[i].suggestion == old { m.faces[i].suggestion = new; changed = true }
+            }
+            if changed { metadata[key] = m }
+        }
+        if hiddenPeople.remove(old) != nil, !peopleNames.contains(new) { hiddenPeople.insert(new) }
+        if let cover = personCovers.removeValue(forKey: old), personCovers[new] == nil { personCovers[new] = cover }
+        if let refs = faceRefs {
+            refs.rename(old, to: new)
+            Task.detached(priority: .utility) { refs.save() }
+        } else {
+            Task.detached(priority: .utility) {
+                let refs = FaceReferences.load()
+                refs.rename(old, to: new)
+                refs.save()
+            }
+        }
+        metadataChanged()
+    }
+
+    private var peopleNames: Set<String> { Set(allPeople.map(\.name)) }
+
+    func setHidden(_ name: String, _ hidden: Bool) {
+        if hidden { hiddenPeople.insert(name) } else { hiddenPeople.remove(name) }
+        save()
+    }
+
+    /// Personnes affichées dans la barre latérale (sans les masquées).
+    var visiblePeople: [(name: String, count: Int)] { allPeople.filter { !hiddenPeople.contains($0.name) } }
+
+    func setCover(_ photo: Photo, faceIndex: Int, for name: String) {
+        personCovers[name] = "\(photo.id)#\(faceIndex)"
+        save()
+    }
+
+    /// Visage servant de portrait à une personne : choisi, sinon le plus grand.
+    func cover(of name: String) -> (photo: Photo, rect: CGRect, rotation: Int)? {
+        var ref: (String, Int)?
+        if let c = personCovers[name], let hash = c.lastIndex(of: "#"), let i = Int(c[c.index(after: hash)...]) {
+            ref = (String(c[..<hash]), i)
+        }
+        if ref == nil { ref = defaultCovers[name] }
+        guard let (id, i) = ref, let p = photo(id: id), let faces = metadata[id]?.faces, faces.indices.contains(i),
+              faces[i].w > 0 else { return nil }
+        return (p, faceRect(faces[i], in: p), metadata[id]?.rotation ?? 0)
+    }
+
+    /// Doublons probables : même nom à la casse ou aux accents près, ou prénom seul d'un nom complet.
+    /// Chaque paire est orientée de la personne la moins présente vers la plus présente.
+    var duplicatePeople: [(from: String, into: String)] {
+        let people = allPeople
+        func norm(_ s: String) -> String { s.searchFolded.trimmingCharacters(in: .whitespaces) }
+        var pairs: [(String, String)] = []
+        for (i, a) in people.enumerated() {
+            for b in people[(i + 1)...] {
+                let na = norm(a.name), nb = norm(b.name)
+                let firstA = na.split(separator: " ").first, firstB = nb.split(separator: " ").first
+                let similar = na == nb
+                    || (na.split(separator: " ").count == 1 && firstA == firstB)
+                    || (nb.split(separator: " ").count == 1 && firstA == firstB)
+                guard similar else { continue }
+                // On garde le nom le plus complet, puis celui avec des majuscules, puis le plus fréquent.
+                func score(_ p: (name: String, count: Int)) -> (Int, Int, Int) {
+                    (p.name.split(separator: " ").count, p.name == p.name.lowercased() ? 0 : 1, p.count)
+                }
+                pairs.append(score(a) < score(b) ? (a.name, b.name) : (b.name, a.name))
+            }
+        }
+        return pairs.map { (from: $0.0, into: $0.1) }
+    }
+
+    // MARK: Correction des dates
+
+    /// Décale les dates (ex. appareil mal réglé : +1 h, -1 an…).
+    func shiftDates(_ list: [Photo], by components: DateComponents) {
+        let cal = Calendar.current
+        for p in list {
+            guard let d = cal.date(byAdding: components, to: p.date) else { continue }
+            metadata[p.id, default: PhotoMetadata()].date = d.timeIntervalSince1970
+        }
+        applyDateOverrides(list.map(\.id))
+    }
+
+    /// Donne une date précise (ex. photos scannées). Avec `keepSpacing`, la plus ancienne
+    /// prend cette date et les autres gardent leur écart avec elle.
+    func setDates(_ list: [Photo], to target: Date, keepSpacing: Bool) {
+        let earliest = list.map(\.date).min() ?? target
+        for p in list {
+            let d = keepSpacing ? target.addingTimeInterval(p.date.timeIntervalSince(earliest)) : target
+            metadata[p.id, default: PhotoMetadata()].date = d.timeIntervalSince1970
+        }
+        applyDateOverrides(list.map(\.id))
+    }
+
+    func resetDates(_ list: [Photo]) {
+        for p in list { metadata[p.id]?.date = nil }
+        applyDateOverrides(list.map(\.id))
+    }
+
+    func hasDateOverride(_ photo: Photo) -> Bool { metadata[photo.id]?.date != nil }
+
+    private func applyDateOverrides(_ ids: [String]) {
+        for id in ids {
+            guard let i = indexByID[id] else { continue }
+            photos[i].dateOverride = metadata[id]?.date.map { Date(timeIntervalSince1970: $0) }
+        }
+        guard !ids.isEmpty else { return }
+        recomputeFolders()
+        resort()
+        revision += 1
+        metadataChanged()
+    }
+
+    // MARK: Intégrité des fichiers
+
+    var isCheckingIntegrity: Bool { integrityTotal > 0 && integrityDone < integrityTotal }
+
+    /// Vérifie que chaque fichier est lisible et complet (fichiers vides, tronqués, illisibles).
+    func checkIntegrity() {
+        guard integrityTask == nil else { return }
+        let items = photos.filter { !$0.offline }
+        integrityTotal = items.count
+        integrityDone = 0
+        integrityTask = Task {
+            var found: [String: String] = [:]
+            var start = 0
+            while start < items.count, !Task.isCancelled {
+                while !(await ImageLoader.limiter.isIdle) { try? await Task.sleep(for: .milliseconds(150)) }
+                let end = min(start + 64, items.count)
+                let batch = Array(items[start..<end])
+                let results = await Task.detached(priority: .utility) { () -> [String?] in
+                    var out = [String?](repeating: nil, count: batch.count)
+                    out.withUnsafeMutableBufferPointer { buffer in
+                        DispatchQueue.concurrentPerform(iterations: batch.count) { i in
+                            buffer[i] = IntegrityChecker.problem(batch[i])
+                        }
+                    }
+                    return out
+                }.value
+                for (p, r) in zip(batch, results) { if let r { found[p.id] = r } }
+                integrityDone = end
+                start = end
+            }
+            let completed = start >= items.count
+            if completed {
+                damaged = found
+                lastIntegrityCheck = Date()
+            } else {
+                damaged.merge(found) { _, new in new }
+            }
+            integrityTotal = 0
+            integrityDone = 0
+            integrityTask = nil
+            save()
+            revision += 1
+            notice = completed
+                ? (found.isEmpty ? "Vérification terminée : tous les fichiers sont lisibles."
+                                 : "Vérification terminée : \(found.count) fichier(s) à problème, listés dans « Fichiers abîmés ».")
+                : "Vérification interrompue (\(found.count) problème(s) trouvés jusque-là)."
+        }
+    }
+
+    func cancelIntegrityCheck() { integrityTask?.cancel() }
+
+    func damageReason(of photo: Photo) -> String? { damaged[photo.id] }
+
+    // MARK: Sauvegarde
+
+    func chooseBackupDestination() {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.canCreateDirectories = true
+        panel.prompt = "Choisir"
+        panel.message = "Choisissez le dossier de sauvegarde (idéalement sur un autre disque)"
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        if root(containing: url.path) != nil || roots.contains(where: { url.path.hasPrefix($0.path) || $0.path.hasPrefix(url.path + "/") }) {
+            notice = "Ce dossier fait partie (ou contient) un dossier analysé : choisissez un emplacement à part, de préférence sur un autre disque."
+            return
+        }
+        backupDestination = url
+        UserDefaults.standard.set(url.path, forKey: "backupDestination")
+        backupPlan = nil
+        planBackup()
+    }
+
+    /// Le dossier de sauvegarde est-il sur le même disque que les photos ?
+    var backupOnSameVolume: Bool {
+        guard let dest = backupDestination, let root = roots.first else { return false }
+        let a = try? dest.resourceValues(forKeys: [.volumeIdentifierKey]).volumeIdentifier as? NSObject
+        let b = try? root.resourceValues(forKeys: [.volumeIdentifierKey]).volumeIdentifier as? NSObject
+        return a != nil && a == b
+    }
+
+    /// Calcule ce qui manque dans la sauvegarde (fichiers absents ou de taille différente).
+    func planBackup() {
+        guard let dest = backupDestination, !isPlanningBackup, !isBackingUp else { return }
+        isPlanningBackup = true
+        let sources = backupSources()
+        let roots = self.roots.filter { FileManager.default.fileExists(atPath: $0.path) }
+        Task {
+            let plan = await Task.detached(priority: .userInitiated) { BackupEngine.plan(sources, roots: roots, destination: dest) }.value
+            backupPlan = plan
+            isPlanningBackup = false
+        }
+    }
+
+    /// Photos, vidéos, XMP et fichiers Picasa des dossiers suivis (exclusions respectées).
+    private func backupSources() -> [(URL, Int64)] {
+        var list = photos.filter { !$0.offline }.map { ($0.url, $0.fileSize) }
+        for path in sidecarPaths { list.append((URL(fileURLWithPath: path), -1)) }
+        for ini in PicasaImporter.iniFiles(in: folders.map(\.path)) { list.append((ini, -1)) }
+        return list
+    }
+
+    func startBackup() {
+        guard let plan = backupPlan, let dest = backupDestination, !isBackingUp else { return }
+        let free = (try? dest.resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey]).volumeAvailableCapacityForImportantUsage) ?? 0
+        if free > 0, free < plan.totalBytes + 200_000_000 {
+            notice = "Pas assez de place sur le disque de sauvegarde : il faut \(ByteCountFormatter.string(fromByteCount: plan.totalBytes, countStyle: .file)), il reste \(ByteCountFormatter.string(fromByteCount: free, countStyle: .file))."
+            return
+        }
+        isBackingUp = true
+        backupBytesDone = 0
+        backupFilesDone = 0
+        backupTask = Task {
+            var errors = 0
+            for chunk in stride(from: 0, to: plan.files.count, by: 20) {
+                if Task.isCancelled { break }
+                let batch = Array(plan.files[chunk..<min(chunk + 20, plan.files.count)])
+                let result = await Task.detached(priority: .utility) { () -> (Int64, Int) in
+                    var bytes: Int64 = 0, failed = 0
+                    for f in batch {
+                        if BackupEngine.copy(f) { bytes += f.size } else { failed += 1 }
+                    }
+                    return (bytes, failed)
+                }.value
+                backupBytesDone += result.0
+                backupFilesDone += batch.count
+                errors += result.1
+            }
+            // Données d'Albumine (notes, personnes, albums…) : copiées à chaque sauvegarde.
+            await Task.detached(priority: .utility) { BackupEngine.copyLibraryData(to: dest) }.value
+            let cancelled = Task.isCancelled
+            isBackingUp = false
+            if !cancelled, errors == 0 {
+                lastBackup = Date()
+                UserDefaults.standard.set(lastBackup, forKey: "lastBackup")
+            }
+            notice = (cancelled ? "Sauvegarde interrompue : " : "Sauvegarde terminée : ")
+                + "\(backupFilesDone - errors) fichier(s) copiés (\(ByteCountFormatter.string(fromByteCount: backupBytesDone, countStyle: .file)))."
+                + (errors > 0 ? " \(errors) erreur(s) : relancez la sauvegarde pour réessayer." : "")
+            backupPlan = nil
+            planBackup()
+        }
+    }
+
+    func cancelBackup() { backupTask?.cancel() }
+
     // MARK: Persistance
 
     private func load() {
@@ -1318,11 +1630,17 @@ final class PhotoLibrary {
         picasaImported = store.picasaImported ?? false
         albumNames = store.albums ?? []
         excludedPaths = store.excluded ?? []
+        hiddenPeople = Set(store.hiddenPeople ?? [])
+        personCovers = store.personCovers ?? [:]
+        damaged = store.damaged ?? [:]
+        lastIntegrityCheck = store.lastIntegrityCheck
     }
 
     private func save() {
         let store = Store(roots: roots.map(\.path), metadata: metadata,
-                          picasaImported: picasaImported, albums: albumNames, excluded: excludedPaths)
+                          picasaImported: picasaImported, albums: albumNames, excluded: excludedPaths,
+                          hiddenPeople: hiddenPeople.sorted(), personCovers: personCovers,
+                          damaged: damaged, lastIntegrityCheck: lastIntegrityCheck)
         let url = storeURL
         Task.detached(priority: .utility) {
             var s = store

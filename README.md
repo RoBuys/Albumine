@@ -60,6 +60,13 @@ Fonctionne avec les seuls Command Line Tools (Xcode non requis). macOS 14 minimu
   **fusionnée** dans le XMP existant sans perdre les données des autres logiciels
 - **Disque débranché** : la photothèque reste consultable (index + miniatures en cache), rebranchement
   détecté automatiquement ; **surveillance des dossiers** : nouvelles photos prises en compte toutes seules
+- **Gestion des personnes** : renommer, fusionner (doublons détectés : casse, accents, prénom seul),
+  masquer, photo de profil (portrait dans la barre latérale) — Réglages › Personnes ou clic droit
+- **Correction des dates** (clic droit › Corriger la date…) : décalage (appareil mal réglé) ou date
+  précise (photos scannées), avec aperçu ; dates d'origine rétablissables ; écrite dans le XMP si activé
+- **Sauvegarde** (Réglages › Sauvegarde) : copie incrémentale vers un autre disque (arborescence conservée,
+  fichiers manquants ou modifiés seulement, jamais de suppression, copie atomique) + données d'Albumine
+- **Intégrité** : détection des fichiers vides, tronqués ou illisibles (vue « Fichiers abîmés »)
 - **Recherche** : nom, dossier, personne, album, étiquette, légende, contenu, texte, lieu, appareil, année (sans accents)
 - **Inspecteur** : EXIF (date, dimensions, appareil, objectif, réglages, GPS → Plans), visages, personnes, albums
 - **Grandes photothèques** : listage immédiat, métadonnées lues en arrière-plan, index persistant,

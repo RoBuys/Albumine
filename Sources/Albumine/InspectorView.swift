@@ -116,6 +116,10 @@ struct InspectorView: View {
                             }
                             Divider()
                             Button("Autre nom…") { faceNameDraft = ""; faceToName = i }
+                            if let n = face.name, face.w > 0 {
+                                Divider()
+                                Button("Utiliser comme photo de profil de \(n)") { library.setCover(photo, faceIndex: i, for: n) }
+                            }
                         } label: {
                             Image(systemName: "pencil")
                         }
@@ -261,7 +265,11 @@ struct InspectorView: View {
         VStack(alignment: .leading, spacing: 6) {
             sectionTitle("Informations")
             Grid(alignment: .leading, horizontalSpacing: 10, verticalSpacing: 5) {
-                row("Date", (info?.dateTaken ?? photo.date).formatted(date: .abbreviated, time: .shortened))
+                if library.hasDateOverride(photo) {
+                    row("Date", (library.photo(id: photo.id)?.date ?? photo.date).formatted(date: .abbreviated, time: .shortened) + " (corrigée)")
+                } else {
+                    row("Date", (info?.dateTaken ?? photo.date).formatted(date: .abbreviated, time: .shortened))
+                }
                 if let w = info?.pixelWidth, let h = info?.pixelHeight {
                     let mp = Double(w * h) / 1_000_000
                     row("Dimensions", "\(w) × \(h) (\(mp.formatted(.number.precision(.fractionLength(1)))) Mpx)")

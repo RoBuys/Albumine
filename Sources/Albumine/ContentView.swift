@@ -28,6 +28,7 @@ struct ContentView: View {
     @Etat private var slideshowPhotos: [Photo]?
     @Etat private var exportPhotos: [Photo]?
     @Etat private var locationPhotos: [Photo]?
+    @Etat private var dateFixPhotos: [Photo]?
     @Etat private var yearFrom: Int?
     @Etat private var yearTo: Int?
     @Etat private var yearAnchors: [(year: Int, id: String)] = []
@@ -112,6 +113,9 @@ struct ContentView: View {
         .sheet(isPresented: Binding(get: { locationPhotos != nil }, set: { if !$0 { locationPhotos = nil } })) {
             LocationPickerSheet(photos: locationPhotos ?? [])
         }
+        .sheet(isPresented: Binding(get: { dateFixPhotos != nil }, set: { if !$0 { dateFixPhotos = nil } })) {
+            DateFixSheet(photos: dateFixPhotos ?? [])
+        }
         .animation(.easeInOut(duration: 0.15), value: viewerList == nil)
         .alert(
             "Import Picasa terminé",
@@ -194,6 +198,7 @@ struct ContentView: View {
                         if item == .unnamedFaces { facesBar }
                         if item == .similar { similarBar }
                         if item == .rejects { rejectsBar }
+                        if item == .damaged { damagedBar }
                         if item == .all || item == .rejects || item == .similar { analysisBanner }
                     }
                 }
@@ -362,6 +367,7 @@ struct ContentView: View {
         Button("Diaporama") { startSlideshow(targets.count > 1 ? targets : visible, from: photo) }
         Button("Exporter…") { exportPhotos = targets }
         Divider()
+        Button("Corriger la date…") { dateFixPhotos = targets }
         Menu("Lieu") {
             Button("Définir le lieu…") { locationPhotos = targets }
             Button("D'après les photos prises juste avant ou après") { library.fillLocationsFromNeighbors(targets) }
@@ -523,6 +529,17 @@ struct ContentView: View {
     }
 
     // MARK: Disque débranché, XMP, souvenirs
+
+    private var damagedBar: some View {
+        Banner(systemImage: "exclamationmark.triangle") {
+            Text("Fichiers vides, tronqués ou illisibles").font(.headline)
+            Text("Souvent récupérables depuis une autre copie (sauvegarde, téléphone, carte mémoire). Clic droit › Afficher dans le Finder pour les remplacer.")
+                .font(.caption).foregroundStyle(.secondary)
+        } actions: {
+            Button("Vérifier à nouveau") { library.checkIntegrity() }
+                .disabled(library.isCheckingIntegrity)
+        }
+    }
 
     @ViewBuilder
     private var offlineBanner: some View {
@@ -739,6 +756,7 @@ struct ContentView: View {
         case .rejects: list = list.filter { library.rejectReason(of: $0) != nil }
         case .place(let name): list = list.filter { library.placeName(of: $0) == name }
         case .memories: list = list.filter { library.memoryIDs.contains($0.id) }
+        case .damaged: list = library.photos.filter { library.damageReason(of: $0) != nil }
         }
         if yearFrom != nil || yearTo != nil {
             let cal = Calendar.current
@@ -757,6 +775,12 @@ struct ContentView: View {
             list.sort { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
         }
         if item == .map { return (list, []) }
+        if item == .damaged {
+            return group(list) { p in
+                let r = library.damageReason(of: p) ?? "Problème"
+                return (r, r, nil)
+            }
+        }
         if item == .memories {
             let thisYear = Calendar.current.component(.year, from: Date())
             return group(list) { p in
@@ -930,6 +954,7 @@ struct ContentView: View {
         case .rejects: return "Photos ratées"
         case .place(let name): return name
         case .memories: return "Souvenirs du jour"
+        case .damaged: return "Fichiers abîmés"
         }
     }
 
