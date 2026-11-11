@@ -743,6 +743,9 @@ final class PhotoLibrary {
             isFindingDuplicates = false
             let waste = duplicateWaste
             Debug.log("doublons : \(duplicateGroups?.count ?? 0) groupes, \(waste.count) copies")
+            #if DEBUG
+            if let k = ProcessInfo.processInfo.environment["ALBUMINE_TEST_KEEPDUP"] { keepInDuplicates([k], keep: k) } // tests
+            #endif
             notice = waste.count == 0
                 ? "Aucun doublon trouvé."
                 : "\(duplicateGroups?.count ?? 0) groupes de doublons : \(waste.count) copies en trop (\(ByteCountFormatter.string(fromByteCount: waste.bytes, countStyle: .file)))."
@@ -779,7 +782,27 @@ final class PhotoLibrary {
     /// Each copy is first compared byte by byte with the kept photo; its ratings,
     /// tags, people and albums are carried over to the kept photo.
     func trashDuplicateCopies() {
-        guard let groups = duplicateGroups, !isTrashing else { return }
+        guard let groups = duplicateGroups else { return }
+        trashDuplicateCopies(in: groups)
+    }
+
+    /// Series containing one of these photos (duplicates or similar photos), in display order.
+    func series(containing ids: Set<String>, in groups: [[String]]?) -> [[String]] {
+        (groups ?? []).filter { $0.contains(where: ids.contains) }
+    }
+
+    /// Right-click on duplicates: keeps the copy marked "À garder" (or `keep`) of each series
+    /// touched, the other copies of those series go to the Trash.
+    func keepInDuplicates(_ ids: Set<String>, keep: String? = nil) {
+        let touched = series(containing: ids, in: duplicateGroups).map { g in
+            keep.map { k in g.contains(k) ? [k] + g.filter { $0 != k } : g } ?? g
+        }
+        trashDuplicateCopies(in: touched)
+    }
+
+    /// Each group: the copy to keep first, then the copies to remove.
+    private func trashDuplicateCopies(in groups: [[String]]) {
+        guard !isTrashing, !groups.isEmpty, let all = duplicateGroups else { return }
         let plan: [(keep: URL, keepID: String, copies: [(id: String, url: URL)])] = groups.compactMap { g in
             guard let keep = photo(id: g[0]) else { return nil }
             return (keep.url, keep.id, g.dropFirst().compactMap { id in photo(id: id).map { (id, $0.url) } })
@@ -806,7 +829,13 @@ final class PhotoLibrary {
             }
             let removed = Set(trashed.map(\.copy))
             removeFromLibrary(removed)
-            setDuplicateGroups(groups.map { $0.filter { !removed.contains($0) } }.filter { $0.count > 1 })
+            // Chosen copies become the copy to keep of their group.
+            let kept = Dictionary(groups.map { ($0[0], true) }, uniquingKeysWith: { a, _ in a })
+            setDuplicateGroups(all.map { g in
+                let rest = g.filter { !removed.contains($0) }
+                guard let k = rest.first(where: { kept[$0] != nil }) else { return rest }
+                return [k] + rest.filter { $0 != k }
+            }.filter { $0.count > 1 })
             isTrashing = false
             let bytes = trashed.reduce(Int64(0)) { $0 + $1.size }
             let skipped = plan.reduce(0) { $0 + $1.copies.count } - trashed.count
@@ -1107,8 +1136,23 @@ final class PhotoLibrary {
     /// Keeps the best photo of each series and moves the others to the Trash
     /// (ratings, people and albums are carried over to the kept one).
     func trashSimilarExtras() {
-        guard let groups = similarGroups, !isTrashing else { return }
-        let plan = groups.compactMap { g -> (keep: String, others: [(String, URL)])? in
+        guard let groups = similarGroups else { return }
+        trashSimilar(in: groups)
+    }
+
+    /// Right-click on similar photos: keeps the best photo (or `keep`) of each series touched,
+    /// the other photos of those series go to the Trash.
+    func keepInSimilar(_ ids: Set<String>, keep: String? = nil) {
+        let touched = series(containing: ids, in: similarGroups).map { g in
+            keep.map { k in g.contains(k) ? [k] + g.filter { $0 != k } : g } ?? g
+        }
+        trashSimilar(in: touched)
+    }
+
+    /// Each group: the photo to keep first, then the ones to remove.
+    private func trashSimilar(in selected: [[String]]) {
+        guard !isTrashing, !selected.isEmpty, let groups = similarGroups else { return }
+        let plan = selected.compactMap { g -> (keep: String, others: [(String, URL)])? in
             guard g.count > 1 else { return nil }
             return (g[0], g.dropFirst().compactMap { id in photo(id: id).map { (id, $0.url) } })
         }
@@ -1128,10 +1172,18 @@ final class PhotoLibrary {
             }
             let removed = Set(trashed.map(\.copy))
             removeFromLibrary(removed)
-            similarGroups = groups.map { $0.filter { !removed.contains($0) } }.filter { $0.count > 1 }
+            let kept = Set(selected.map { $0[0] })
+            similarGroups = groups.map { g in
+                let rest = g.filter { !removed.contains($0) }
+                guard let k = rest.first(where: kept.contains) else { return rest }
+                return [k] + rest.filter { $0 != k }
+            }.filter { $0.count > 1 }
+            similarBest = Set((similarGroups ?? []).compactMap(\.first))
             similarRevision += 1
             isTrashing = false
-            notice = "\(trashed.count) photos mises à la corbeille ; la meilleure de chaque série est conservée."
+            notice = selected.count == 1
+                ? "\(trashed.count) photo\(trashed.count > 1 ? "s" : "") de la série mise\(trashed.count > 1 ? "s" : "") à la corbeille (récupérable\(trashed.count > 1 ? "s" : "")) ; une photo est conservée."
+                : "\(trashed.count) photos mises à la corbeille (récupérables) ; une photo est conservée dans chacune des \(selected.count) séries."
             metadataChanged()
         }
     }

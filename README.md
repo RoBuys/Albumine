@@ -92,10 +92,12 @@ without it, installed copies cannot be updated automatically anymore.
   an exact date (scanned photos), with preview; original dates can be restored
 - **Exact duplicates**: same size + fingerprint (remembered: after the first search, only new files are read), then byte-by-byte comparison before removal; the most
   annotated copy is kept, the others go **to the Trash** (recoverable) and their ratings, people and
-  albums are carried over
+  albums are carried over; right-click a group › keep the marked copy, or keep the copy you clicked
 - **Similar photos**: bursts and resized versions (perceptual hash + time proximity);
-  "keep the best of each series" (best according to Vision and your annotations)
+  "keep the best of each series" (best according to Vision and your annotations), or per series from
+  the right-click menu: keep the best one, or keep the photo you clicked
 - **Failed photos**: blurry, too dark, overexposed, screenshots and documents, poor shots;
+  a click adds a photo to the selection (⇧-click: range, ⌘A: all), then move the selection to the Trash;
   "Ce n'est pas raté" (Not a failure) removes a photo from the list
 - **Slideshow**: full screen, crossfade, slow zoom, optional music (Space, ← →, Esc)
 - **Export** (size, quality, rotation and edits, GPS removal) and **Share** (Mail, Messages, AirDrop…)

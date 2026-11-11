@@ -366,6 +366,9 @@ struct ContentView: View {
         if sidebar == .rejects {
             Button("Ce n'est pas raté") { library.markQualityOK(targets) }
         }
+        if sidebar == .duplicates || sidebar == .similar {
+            seriesMenu(for: photo, targets: targets)
+        }
         Button("Analyser les visages") { library.analyzeFaces(in: targets) }
         Divider()
         Button("Diaporama") { startSlideshow(targets.count > 1 ? targets : visible, from: photo) }
@@ -393,6 +396,40 @@ struct ContentView: View {
         }
         Divider()
         Button("Mettre à la corbeille…", role: .destructive) { photosToTrash = targets }
+    }
+
+    /// Duplicates and similar photos: keep one photo of the series under the mouse (or of every
+    /// series touched by the selection) and send the others to the Trash.
+    @ViewBuilder
+    private func seriesMenu(for photo: Photo, targets: [Photo]) -> some View {
+        let isDup = sidebar == .duplicates
+        let groups = isDup ? library.duplicateGroups : library.similarGroups
+        let ids = Set(targets.map(\.id))
+        let touched = library.series(containing: ids, in: groups)
+        let own = touched.first { $0.contains(photo.id) } ?? []
+        let isBest = own.first == photo.id
+        if touched.count > 1 {
+            Button(isDup ? "Garder la copie « À garder » des \(touched.count) groupes sélectionnés"
+                         : "Garder la meilleure des \(touched.count) séries sélectionnées") {
+                if isDup { library.keepInDuplicates(ids) } else { library.keepInSimilar(ids) }
+                selection.removeAll()
+            }
+        } else if own.count > 1 {
+            Button(isDup ? "Garder la copie « À garder » de ce groupe (\(own.count - 1) à la corbeille)"
+                         : "Garder la meilleure de cette série (\(own.count - 1) à la corbeille)") {
+                if isDup { library.keepInDuplicates([photo.id]) } else { library.keepInSimilar([photo.id]) }
+                selection.removeAll()
+            }
+            if !isBest {
+                Button(isDup ? "Garder cette copie, mettre les \(own.count - 1) autres à la corbeille"
+                             : "Garder cette photo, mettre les \(own.count - 1) autres à la corbeille") {
+                    if isDup { library.keepInDuplicates([photo.id], keep: photo.id) }
+                    else { library.keepInSimilar([photo.id], keep: photo.id) }
+                    selection.removeAll()
+                }
+            }
+        }
+        Divider()
     }
 
     private func dropToAlbum(_ album: String, _ ids: [String]) {
@@ -506,12 +543,20 @@ struct ContentView: View {
     private var rejectsBar: some View {
         Banner(systemImage: "hand.thumbsdown") {
             Text("Photos probablement ratées : floues, trop sombres, surexposées, captures d'écran…").font(.headline)
-            Text("Sélectionnez puis mettez à la corbeille, ou « Ce n'est pas raté » pour les retirer de cette liste.")
+            Text("Cliquez sur les photos pour les sélectionner (⇧-clic : une plage, ⌘A : tout), puis mettez-les à la corbeille ou « Ce n'est pas raté » pour les retirer de la liste.")
                 .font(.caption).foregroundStyle(.secondary)
         } actions: {
+            if selection.isEmpty {
+                Button("Tout sélectionner") { selection = Set(visible.map(\.id)) }
+                    .keyboardShortcut("a", modifiers: .command)
+            } else {
+                Button("Tout désélectionner") { selection.removeAll() }
+                    .keyboardShortcut("a", modifiers: .command)
+            }
             Button("Ce n'est pas raté") { library.markQualityOK(selectedPhotos); selection.removeAll() }
                 .disabled(selection.isEmpty)
-            Button("Mettre la sélection à la corbeille…") { photosToTrash = selectedPhotos }
+            Button(selection.isEmpty ? "Mettre la sélection à la corbeille…"
+                   : "Mettre \(selection.count.formatted()) photo\(selection.count > 1 ? "s" : "") à la corbeille…") { photosToTrash = selectedPhotos }
                 .buttonStyle(.borderedProminent)
                 .disabled(selection.isEmpty)
         }
@@ -707,6 +752,10 @@ struct ContentView: View {
                   let a = photos.firstIndex(where: { $0.id == anchor }),
                   let b = photos.firstIndex(where: { $0.id == photo.id }) {
             selection = Set(photos[min(a, b)...max(a, b)].map(\.id))
+        } else if sidebar == .rejects {
+            // Sorting failed photos: a simple click adds or removes the photo from the selection.
+            if selection.contains(photo.id) { selection.remove(photo.id) } else { selection.insert(photo.id) }
+            anchor = photo.id
         } else {
             selection = [photo.id]
             anchor = photo.id
