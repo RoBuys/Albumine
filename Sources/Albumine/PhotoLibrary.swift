@@ -53,8 +53,34 @@ final class PhotoLibrary {
     private(set) var folders: [FolderSummary] = []
     private(set) var allTags: [(name: String, count: Int)] = []
     private(set) var starredCount = 0
+    /// Photos marked "à jeter" (keyboard review).
+    private(set) var discardCount = 0
     private(set) var allPeople: [(name: String, count: Int)] = []
     private(set) var allAlbums: [(name: String, count: Int)] = []
+
+    // Smart albums: saved searches
+    private(set) var smartAlbums: [SmartAlbum] = []
+
+    func saveSmartAlbum(_ album: SmartAlbum) {
+        smartAlbums.removeAll { $0.name == album.name }
+        smartAlbums.append(album)
+        smartAlbums.sort { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+        save()
+    }
+
+    func deleteSmartAlbum(_ name: String) {
+        smartAlbums.removeAll { $0.name == name }
+        save()
+    }
+
+    func renameSmartAlbum(_ name: String, to newName: String) {
+        let n = newName.trimmingCharacters(in: .whitespaces)
+        guard !n.isEmpty, n != name, !smartAlbums.contains(where: { $0.name == n }),
+              let i = smartAlbums.firstIndex(where: { $0.name == name }) else { return }
+        smartAlbums[i].name = n
+        smartAlbums.sort { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+        save()
+    }
 
     // Virtual albums (list kept even when an album is empty)
     private(set) var albumNames: [String] = []
@@ -150,6 +176,8 @@ final class PhotoLibrary {
         var personCovers: [String: String]?
         var damaged: [String: String]?
         var lastIntegrityCheck: Date?
+        var preferredFolders: [String]?
+        var smartAlbums: [SmartAlbum]?
     }
 
     init() {
@@ -279,10 +307,24 @@ final class PhotoLibrary {
         isScanning = true
         let reachable = roots.filter { FileManager.default.fileExists(atPath: $0.path) }
         let missing = roots.filter { r in !reachable.contains(where: { $0.path == r.path }) }
+        // First scan of the session: show the library known from the index right away, the
+        // drive is then read in the background (about a minute for a large hard drive).
+        let instant = photos.isEmpty
         Task {
             let start = Date()
+            let index = await Task.detached(priority: .userInitiated) { IndexStore.load() }.value
+            if instant, !index.isEmpty, generation == scanGeneration {
+                let known = await Task.detached(priority: .userInitiated) { () -> [Photo] in
+                    reachable.flatMap { PhotoScanner.offlinePhotos(under: $0, index: index, excluded: excluded, offline: false) }
+                        + missing.flatMap { PhotoScanner.offlinePhotos(under: $0, index: index, excluded: excluded) }
+                }.value
+                if generation == scanGeneration, !known.isEmpty {
+                    offlineRoots = missing
+                    setPhotos(known)
+                    Debug.log("démarrage : \(known.count) photos affichées depuis l'index en \(Date().timeIntervalSince(start)) s")
+                }
+            }
             let result = await Task.detached(priority: .userInitiated) { () -> ScanResult in
-                let index = IndexStore.load()
                 var result = PhotoScanner.scan(reachable, index: index, excluded: excluded)
                 // Disconnected drive: keep its photos, from the index (cached thumbnails).
                 for root in missing { result.photos += PhotoScanner.offlinePhotos(under: root, index: index, excluded: excluded) }
@@ -294,7 +336,7 @@ final class PhotoLibrary {
             sidecarCount = result.sidecars.count
             startWatching(reachable)
             Debug.log("scan: \(result.photos.count) photos (dont \(result.photos.filter(\.offline).count) hors ligne), \(result.pending.count) EXIF à lire, \(result.sidecars.count) XMP, \(Date().timeIntervalSince(start)) s")
-            setPhotos(result.photos)
+            if !sameFiles(result.photos) { setPhotos(result.photos) }
             isScanning = false
             if ProcessInfo.processInfo.environment["ALBUMINE_AUTOIMPORT"] != nil { importPicasa() } // tests
             if ProcessInfo.processInfo.environment["ALBUMINE_AUTODUPLICATES"] != nil { findDuplicates() } // tests
@@ -304,6 +346,17 @@ final class PhotoLibrary {
             } else {
                 startExifPass(result.pending, generation: generation)
             }
+        }
+    }
+
+    /// Did the scan find exactly the files already shown (same size, date, availability)?
+    private func sameFiles(_ incoming: [Photo]) -> Bool {
+        guard incoming.count == photos.count, !photos.isEmpty else { return false }
+        return incoming.allSatisfy { p in
+            guard let i = indexByID[p.id] else { return false }
+            let q = photos[i]
+            return q.fileSize == p.fileSize && abs(q.modificationDate.timeIntervalSince(p.modificationDate)) < 1
+                && q.offline == p.offline && q.exifChecked == p.exifChecked
         }
     }
 
@@ -444,8 +497,10 @@ final class PhotoLibrary {
         var albumCounts: [String: Int] = Dictionary(uniqueKeysWithValues: albumNames.map { ($0, 0) })
         var starred = 0
         var unnamed = 0
+        var discards = 0
         for (path, m) in metadata where indexByID[path] != nil {
             if m.rating > 0 { starred += 1 }
+            if m.discard { discards += 1 }
             if m.hasUnnamedFaces { unnamed += 1 }
             for t in m.tags { tagCounts[t, default: 0] += 1 }
             for p in m.people { peopleCounts[p, default: 0] += 1 }
@@ -459,6 +514,7 @@ final class PhotoLibrary {
                 .sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
         }
         starredCount = starred
+        discardCount = discards
         unnamedFaceCount = unnamed
         allTags = sorted(tagCounts)
         defaultCovers = covers.mapValues { ($0.0, $0.1) }
@@ -469,6 +525,19 @@ final class PhotoLibrary {
     // MARK: Ratings and tags
 
     func rating(of photo: Photo) -> Int { metadata[photo.id]?.rating ?? 0 }
+    func isDiscarded(_ photo: Photo) -> Bool { metadata[photo.id]?.discard ?? false }
+
+    /// Marks photos "à jeter" (or back to kept). Nothing is moved until the user empties that list.
+    func setDiscard(_ photos: [Photo], _ on: Bool) {
+        var changed = false
+        for p in photos where (metadata[p.id]?.discard ?? false) != on {
+            metadata[p.id, default: PhotoMetadata()].discard = on
+            changed = true
+        }
+        if changed { metadataChanged() }
+    }
+
+    var discardedPhotos: [Photo] { photos.filter { metadata[$0.id]?.discard ?? false } }
     func tags(of photo: Photo) -> [String] { metadata[photo.id]?.tags ?? [] }
     func people(of photo: Photo) -> [String] { metadata[photo.id]?.people ?? [] }
     func albums(of photo: Photo) -> [String] { metadata[photo.id]?.albums ?? [] }
@@ -745,6 +814,21 @@ final class PhotoLibrary {
             Debug.log("doublons : \(duplicateGroups?.count ?? 0) groupes, \(waste.count) copies")
             #if DEBUG
             if let k = ProcessInfo.processInfo.environment["ALBUMINE_TEST_KEEPDUP"] { keepInDuplicates([k], keep: k) } // tests
+            if ProcessInfo.processInfo.environment["ALBUMINE_SELFTEST"] == "folders", !selfTestDone {
+                selfTestDone = true
+                for p in duplicateFolderPairs { Debug.log("paire : \((p.a as NSString).lastPathComponent) ↔ \((p.b as NSString).lastPathComponent) : \(p.count)") }
+                if let pair = duplicateFolderPairs.first(where: { !$0.isInternal }) {
+                    keepFolder(pair.a, in: pair)
+                    while isTrashing { try? await Task.sleep(for: .milliseconds(100)) }
+                    Debug.log("test : après « garder \((pair.a as NSString).lastPathComponent) » : \(photos.count) photos, message : \(notice ?? "-"), annulable : \(canUndoTrash)")
+                    Debug.log("test : métadonnées \(metadata.filter { !$0.value.isEmpty }.map { ($0.key as NSString).lastPathComponent + "=" + String($0.value.rating) }.sorted())")
+                    try? await Task.sleep(for: .seconds(1))
+                    undoLastTrash()
+                    while isTrashing || isScanning { try? await Task.sleep(for: .milliseconds(100)) }
+                    Debug.log("test : après annulation : \(photos.count) photos, message : \(notice ?? "-"), groupes : \(duplicateGroups?.count ?? -1)")
+                    Debug.log("test : métadonnées \(metadata.filter { !$0.value.isEmpty }.map { ($0.key as NSString).lastPathComponent + "=" + String($0.value.rating) }.sorted())")
+                }
+            }
             #endif
             notice = waste.count == 0
                 ? "Aucun doublon trouvé."
@@ -757,11 +841,92 @@ final class PhotoLibrary {
             (photo(id: $0[0])?.fileSize ?? 0) * Int64($0.count) > (photo(id: $1[0])?.fileSize ?? 0) * Int64($1.count)
         }
         duplicateKeepers = Set(groups.compactMap(\.first))
+        recomputeDuplicateFolders()
         revision += 1
     }
 
-    /// Preference order for the copy to keep: most annotated, then oldest, then shortest path.
+    // Duplicates by folder
+
+    /// Two folders that share identical files (or one folder holding several copies: a == b).
+    struct DuplicateFolderPair: Identifiable, Equatable {
+        let a: String
+        let b: String
+        var count: Int        // groups with a copy in both
+        var bytes: Int64      // size of one copy of each
+        var id: String { a + "\t" + b }
+        var isInternal: Bool { a == b }
+    }
+    private(set) var duplicateFolderPairs: [DuplicateFolderPair] = []
+    /// Folders whose copies are always kept (most important first); subfolders included.
+    private(set) var preferredFolders: [String] = []
+
+    private func recomputeDuplicateFolders() {
+        var pairs: [String: DuplicateFolderPair] = [:]
+        for g in duplicateGroups ?? [] {
+            let items = g.compactMap { photo(id: $0) }
+            guard let size = items.first?.fileSize else { continue }
+            let byFolder = Dictionary(grouping: items, by: \.folderPath)
+            let folders = byFolder.keys.sorted()
+            func add(_ a: String, _ b: String) {
+                let key = a + "\t" + b
+                pairs[key, default: DuplicateFolderPair(a: a, b: b, count: 0, bytes: 0)].count += 1
+                pairs[key]!.bytes += size
+            }
+            for (i, a) in folders.enumerated() {
+                if byFolder[a]!.count > 1 { add(a, a) }
+                for b in folders[(i + 1)...] { add(a, b) }
+            }
+        }
+        duplicateFolderPairs = pairs.values.sorted { ($0.count, $0.bytes, $1.id) > ($1.count, $1.bytes, $0.id) }
+    }
+
+    /// Groups of duplicates with a copy in both folders of the pair.
+    func duplicateGroups(in pair: DuplicateFolderPair) -> [[String]] {
+        (duplicateGroups ?? []).filter { g in
+            let folders = g.compactMap { photo(id: $0)?.folderPath }
+            return pair.isInternal ? folders.filter { $0 == pair.a }.count > 1
+                                   : folders.contains(pair.a) && folders.contains(pair.b)
+        }
+    }
+
+    /// Keeps the copies of `keep` and moves to the Trash the identical files of the other folder
+    /// of the pair (copies in other folders are left alone). Internal pair: one copy stays.
+    func keepFolder(_ keep: String, in pair: DuplicateFolderPair) {
+        let other = keep == pair.a ? pair.b : pair.a
+        var steps: [TrashStep] = []
+        for g in duplicateGroups(in: pair) {
+            let inKeep = g.filter { photo(id: $0)?.folderPath == keep }
+            guard let keeper = inKeep.first else { continue }
+            let remove = pair.isInternal ? Array(inKeep.dropFirst()) : g.filter { photo(id: $0)?.folderPath == other }
+            steps += remove.map { TrashStep(remove: $0, into: keeper) }
+        }
+        let name = (other as NSString).lastPathComponent
+        performTrash(steps, verifyIdentical: true) { [self] r in
+            notice = "\(r.removed.count) copie\(r.removed.count > 1 ? "s" : "") de « \(name) » mise\(r.removed.count > 1 ? "s" : "") à la corbeille (\(ByteCountFormatter.string(fromByteCount: r.bytes, countStyle: .file)) libérés)."
+                + (r.skipped > 0 ? " \(r.skipped) fichiers gardés : contenu différent ou corbeille indisponible." : "")
+        }
+    }
+
+    func isPreferredFolder(_ path: String) -> Bool { preferredFolders.contains(path) }
+
+    /// Rule: the copies of this folder (and its subfolders) are the ones to keep.
+    func setPreferredFolder(_ path: String, _ on: Bool) {
+        preferredFolders.removeAll { $0 == path }
+        if on { preferredFolders.append(path) }
+        save()
+        if let g = duplicateGroups { setDuplicateGroups(g.map { $0.sorted(by: keeperFirst) }) }
+    }
+
+    private func preferenceRank(_ id: String) -> Int {
+        guard !preferredFolders.isEmpty else { return 0 }
+        return preferredFolders.firstIndex { id.hasPrefix($0 + "/") } ?? Int.max
+    }
+
+    /// Preference order for the copy to keep: folder rules, then most annotated, then oldest,
+    /// then shortest path.
     private func keeperFirst(_ a: String, _ b: String) -> Bool {
+        let pa = preferenceRank(a), pb = preferenceRank(b)
+        if pa != pb { return pa < pb }
         let ra = metadata[a]?.richness ?? 0, rb = metadata[b]?.richness ?? 0
         if ra != rb { return ra > rb }
         let da = photo(id: a)?.modificationDate ?? .distantFuture, db = photo(id: b)?.modificationDate ?? .distantFuture
@@ -802,64 +967,171 @@ final class PhotoLibrary {
 
     /// Each group: the copy to keep first, then the copies to remove.
     private func trashDuplicateCopies(in groups: [[String]]) {
-        guard !isTrashing, !groups.isEmpty, let all = duplicateGroups else { return }
-        let plan: [(keep: URL, keepID: String, copies: [(id: String, url: URL)])] = groups.compactMap { g in
-            guard let keep = photo(id: g[0]) else { return nil }
-            return (keep.url, keep.id, g.dropFirst().compactMap { id in photo(id: id).map { (id, $0.url) } })
+        let steps = groups.flatMap { g in g.dropFirst().map { TrashStep(remove: $0, into: g[0]) } }
+        performTrash(steps, verifyIdentical: true) { [self] r in
+            notice = "\(r.removed.count) copie\(r.removed.count > 1 ? "s" : "") mise\(r.removed.count > 1 ? "s" : "") à la corbeille (\(ByteCountFormatter.string(fromByteCount: r.bytes, countStyle: .file)) libérés)."
+                + (r.skipped > 0 ? " \(r.skipped) fichiers gardés : contenu différent ou corbeille indisponible." : "")
+        }
+    }
+
+    // MARK: Trash and undo
+
+    /// `remove` goes to the Trash; its ratings, people, albums… are merged into `into`.
+    struct TrashStep { let remove: String; let into: String? }
+
+    /// What the last move to the Trash did, to put everything back.
+    struct TrashUndo {
+        var files: [(original: URL, trashed: URL)]
+        var metadata: [String: PhotoMetadata?]
+        var duplicateGroups: [[String]]?
+        var similarGroups: [[String]]?
+    }
+    private(set) var lastTrash: TrashUndo?
+    /// The message that goes with the last move to the Trash (it gets an "Annuler" button).
+    private(set) var undoNotice: String?
+    var canUndoTrash: Bool { lastTrash != nil && !isTrashing }
+
+    struct TrashResult { let removed: Set<String>; let skipped: Int; let bytes: Int64 }
+
+    nonisolated static func moveToTrash(_ url: URL) -> URL? {
+        var out: NSURL?
+        guard (try? FileManager.default.trashItem(at: url, resultingItemURL: &out)) != nil else { return nil }
+        return out as URL?
+    }
+
+    /// Moves files to the Trash (recoverable), merges their annotations into the kept photos,
+    /// updates the duplicate and similar series, and remembers how to undo it all.
+    /// - verifyIdentical: compares each file byte by byte with its kept copy first (duplicates).
+    private func performTrash(_ steps: [TrashStep], verifyIdentical: Bool = false, chained: Bool = false,
+                              then: @escaping (TrashResult) -> Void) {
+        guard !isTrashing else {
+            // Already moving files (quick sorting, series after series): this one waits its turn.
+            pendingTrash.append { [self] in performTrash(steps, verifyIdentical: verifyIdentical, chained: true, then: then) }
+            return
+        }
+        let work: [(remove: String, url: URL, into: String?, keepURL: URL?)] = steps.compactMap { st in
+            guard let p = photo(id: st.remove), !p.offline, st.remove != st.into else { return nil }
+            let keep = st.into.flatMap { photo(id: $0) }
+            if st.into != nil, keep == nil { return nil }
+            return (st.remove, p.url, st.into, keep?.url)
+        }
+        guard !work.isEmpty else { runPendingTrash(); return }
+        var undo = TrashUndo(files: [], metadata: [:], duplicateGroups: duplicateGroups, similarGroups: similarGroups)
+        // Operations that followed each other without a pause are undone together.
+        let previous = chained ? lastTrash : nil
+        for w in work {
+            undo.metadata[w.remove] = .some(metadata[w.remove])
+            if let k = w.into { undo.metadata[k] = .some(metadata[k]) }
         }
         isTrashing = true
         Task {
-            let trashed = await Task.detached(priority: .userInitiated) { () -> [(kept: String, copy: String, size: Int64)] in
-                var done: [(String, String, Int64)] = []
-                for g in plan {
-                    for c in g.copies where DuplicateFinder.identical(g.keep, c.url) {
-                        let size = (try? c.url.resourceValues(forKeys: [.fileSizeKey]).fileSize).flatMap { $0 } ?? 0
-                        if (try? FileManager.default.trashItem(at: c.url, resultingItemURL: nil)) != nil {
-                            done.append((g.keepID, c.id, Int64(size)))
-                        }
-                    }
+            let done = await Task.detached(priority: .userInitiated) { () -> [(id: String, into: String?, from: URL, to: URL?, size: Int64)] in
+                var done: [(String, String?, URL, URL?, Int64)] = []
+                for w in work {
+                    if verifyIdentical, let k = w.keepURL, !DuplicateFinder.identical(k, w.url) { continue }
+                    let size = (try? w.url.resourceValues(forKeys: [.fileSizeKey]).fileSize).flatMap { $0 } ?? 0
+                    guard (try? FileManager.default.attributesOfItem(atPath: w.url.path)) != nil else { continue }
+                    var out: NSURL?
+                    guard (try? FileManager.default.trashItem(at: w.url, resultingItemURL: &out)) != nil else { continue }
+                    done.append((w.remove, w.into, w.url, out as URL?, Int64(size)))
                 }
                 return done
             }.value
-            for t in trashed {
-                if let m = metadata[t.copy] {
-                    metadata[t.kept, default: PhotoMetadata()].merge(m)
-                    metadata[t.copy] = nil
-                }
+            for d in done {
+                if let k = d.into, let m = metadata[d.id] { metadata[k, default: PhotoMetadata()].merge(m) }
+                metadata[d.id] = nil
+                if let to = d.to { undo.files.append((d.from, to)) }
             }
-            let removed = Set(trashed.map(\.copy))
+            let removed = Set(done.map(\.id))
+            let kept = Set(done.compactMap(\.into))
+            undo.metadata = undo.metadata.filter { removed.contains($0.key) || kept.contains($0.key) }
             removeFromLibrary(removed)
-            // Chosen copies become the copy to keep of their group.
-            let kept = Dictionary(groups.map { ($0[0], true) }, uniquingKeysWith: { a, _ in a })
-            setDuplicateGroups(all.map { g in
-                let rest = g.filter { !removed.contains($0) }
-                guard let k = rest.first(where: { kept[$0] != nil }) else { return rest }
-                return [k] + rest.filter { $0 != k }
-            }.filter { $0.count > 1 })
+            // Series: removed photos leave them, the kept photo comes first.
+            func prune(_ groups: [[String]]?) -> [[String]]? {
+                groups?.map { g in
+                    let rest = g.filter { !removed.contains($0) }
+                    guard let k = rest.first(where: kept.contains) else { return rest }
+                    return [k] + rest.filter { $0 != k }
+                }.filter { $0.count > 1 }
+            }
+            if let g = prune(duplicateGroups) { setDuplicateGroups(g) }
+            if let g = prune(similarGroups) {
+                similarGroups = g
+                similarBest = Set(g.compactMap(\.first))
+                similarRevision += 1
+            }
+            if let previous {
+                undo.files = previous.files + undo.files
+                undo.metadata.merge(previous.metadata) { _, older in older }
+                undo.duplicateGroups = previous.duplicateGroups
+                undo.similarGroups = previous.similarGroups
+            }
+            lastTrash = undo.files.isEmpty ? nil : undo
             isTrashing = false
-            let bytes = trashed.reduce(Int64(0)) { $0 + $1.size }
-            let skipped = plan.reduce(0) { $0 + $1.copies.count } - trashed.count
-            notice = "\(trashed.count) copies mises à la corbeille (\(ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file)) libérés)."
-                + (skipped > 0 ? " \(skipped) fichiers gardés : contenu différent ou corbeille indisponible." : "")
+            then(TrashResult(removed: removed, skipped: work.count - done.count, bytes: done.reduce(0) { $0 + $1.size }))
+            undoNotice = lastTrash == nil ? nil : notice
             metadataChanged()
+            runPendingTrash()
+        }
+    }
+
+    @ObservationIgnored private var pendingTrash: [() -> Void] = []
+    #if DEBUG
+    @ObservationIgnored private var selfTestDone = false
+    #endif
+
+    private func runPendingTrash() {
+        guard !isTrashing, !pendingTrash.isEmpty else { return }
+        pendingTrash.removeFirst()()
+    }
+
+    /// Puts the files of the last move to the Trash back in place, with their annotations.
+    func undoLastTrash() {
+        guard let undo = lastTrash, !isTrashing else { return }
+        lastTrash = nil
+        isTrashing = true
+        Task {
+            let restored = await Task.detached(priority: .userInitiated) { () -> Int in
+                var n = 0
+                for f in undo.files where !FileManager.default.fileExists(atPath: f.original.path) {
+                    if (try? FileManager.default.moveItem(at: f.trashed, to: f.original)) != nil { n += 1 }
+                }
+                return n
+            }.value
+            for (id, m) in undo.metadata { metadata[id] = m }
+            isTrashing = false
+            duplicateGroups = undo.duplicateGroups
+            duplicateKeepers = Set((undo.duplicateGroups ?? []).compactMap(\.first))
+            similarGroups = undo.similarGroups
+            similarBest = Set((undo.similarGroups ?? []).compactMap(\.first))
+            similarRevision += 1
+            let missing = undo.files.count - restored
+            notice = "\(restored) fichier\(restored > 1 ? "s" : "") remis en place."
+                + (missing > 0 ? " \(missing) introuvable\(missing > 1 ? "s" : "") dans la Corbeille (déjà vidée ?)." : "")
+            metadataChanged()
+            rescan()
         }
     }
 
     /// Moves photos to the Trash (recoverable).
     func trash(_ photos: [Photo]) {
-        let urls = photos.filter { !$0.offline }.map { ($0.id, $0.url) }
-        Task {
-            let done = await Task.detached { urls.filter { (try? FileManager.default.trashItem(at: $0.1, resultingItemURL: nil)) != nil }.map(\.0) }.value
-            for id in done { metadata[id] = nil }
-            removeFromLibrary(Set(done))
-            if done.count < urls.count { notice = "\(urls.count - done.count) fichiers n'ont pas pu être mis à la corbeille." }
-            metadataChanged()
+        let count = photos.count
+        performTrash(photos.map { TrashStep(remove: $0.id, into: nil) }) { [self] r in
+            notice = "\(r.removed.count) élément\(r.removed.count > 1 ? "s" : "") mis à la corbeille."
+                + (r.removed.count < count ? " \(count - r.removed.count) n'ont pas pu l'être." : "")
         }
     }
 
     /// Removes photos from the list without rescanning (EXIF reading resumes afterwards).
     private func removeFromLibrary(_ ids: Set<String>) {
         guard !ids.isEmpty else { return }
+        if isScanning {
+            // The drive is still being read (instant startup): its result would bring the removed
+            // files back, so the scan starts again.
+            setPhotos(photos.filter { !ids.contains($0.id) })
+            rescan()
+            return
+        }
         exifTask?.cancel()
         scanGeneration += 1
         setPhotos(photos.filter { !ids.contains($0.id) })
@@ -948,6 +1220,205 @@ final class PhotoLibrary {
             notice = "Analyse des visages\(Task.isCancelled ? " interrompue" : " terminée") : \(found) visages trouvés, \(suggested) noms proposés. Ils sont dans « Visages à nommer »."
         }
     }
+
+    // MARK: Grouping unknown faces
+
+    /// A face of a photo, found again by its position (indices move when a face is removed).
+    struct FaceRef: Hashable, Identifiable {
+        let photo: String
+        let x: Double
+        let y: Double
+        var id: String { "\(photo)|\(x)|\(y)" }
+    }
+
+    /// Faces that look alike. `suggestion`: the known person they resemble, if any.
+    struct FaceGroup: Identifiable {
+        let id: Int
+        var faces: [FaceRef]
+        var suggestion: String?
+    }
+
+    private(set) var faceGroups: [FaceGroup]?
+    private(set) var isGroupingFaces = false
+    private(set) var faceGroupDone = 0
+    private(set) var faceGroupTotal = 0
+    /// Unnamed faces that resemble no other (they stay in the grid).
+    private(set) var faceGroupSingles = 0
+    @ObservationIgnored private var faceGroupTask: Task<Void, Never>?
+
+    func faceIndex(_ ref: FaceRef) -> Int? {
+        metadata[ref.photo]?.faces.firstIndex { $0.name == nil && $0.x == ref.x && $0.y == ref.y }
+    }
+
+    func cancelFaceGrouping() { faceGroupTask?.cancel() }
+
+    /// Reference fingerprints of the named people (built on first use).
+    private func loadReferences() async -> FaceReferences {
+        let refs: FaceReferences
+        if let r = faceRefs { refs = r } else { refs = await Task.detached { FaceReferences.load() }.value }
+        faceRefs = refs
+        var examples: [String: [(url: URL, rotation: Int, rect: CGRect)]] = [:]
+        for (path, m) in metadata where indexByID[path] != nil {
+            guard let p = photo(id: path), !p.isVideo, !p.offline else { continue }
+            for f in m.faces where f.w >= 0.05 { if let n = f.name { examples[n, default: []].append((p.url, m.rotation, faceRect(f, in: p))) } }
+        }
+        let known = refs.people
+        let missing = examples.filter { !known.contains($0.key) }.mapValues { list in
+            Array(list.sorted { $0.rect.width > $1.rect.width }.prefix(FaceReferences.samplesPerPerson * 3).shuffled()
+                .prefix(FaceReferences.samplesPerPerson))
+        }
+        if !missing.isEmpty {
+            await Task.detached(priority: .utility) {
+                for (name, list) in missing {
+                    for e in list {
+                        if let fp = FaceEngine.referencePrint(url: e.url, rotation: e.rotation, rect: e.rect) { refs.add(fp, for: name) }
+                    }
+                }
+                refs.save()
+            }.value
+        }
+        return refs
+    }
+
+    /// Groups the unnamed faces: first those that resemble a known person (name suggested),
+    /// then the unknown ones that look alike, so that a whole group is named at once.
+    func groupUnknownFaces() {
+        guard !isGroupingFaces else { return }
+        var items: [(ref: FaceRef, url: URL, rotation: Int, rect: CGRect)] = []
+        for (path, m) in metadata where m.hasUnnamedFaces {
+            guard let p = photo(id: path), !p.isVideo, !p.offline else { continue }
+            for f in m.faces where f.name == nil && f.w >= FaceEngine.minFaceWidth {
+                items.append((FaceRef(photo: path, x: f.x, y: f.y), p.url, m.rotation, faceRect(f, in: p)))
+            }
+        }
+        guard !items.isEmpty else {
+            notice = offlineCount > 0 ? "Aucun visage à regrouper sur les disques branchés." : "Aucun visage à regrouper."
+            return
+        }
+        items.sort { $0.ref.id < $1.ref.id }
+        isGroupingFaces = true
+        faceGroupDone = 0
+        faceGroupTotal = items.count
+        faceGroupTask = Task {
+            let refs = await loadReferences()
+            var cache = await Task.detached(priority: .utility) { FaceVectorCache.load() }.value
+            var todo = items.filter { cache.vectors[$0.ref.id] == nil }
+            faceGroupDone = items.count - todo.count
+            var sinceSave = 0
+            while !todo.isEmpty, !Task.isCancelled {
+                await ImageLoader.waitUntilIdle(maxSeconds: 2)
+                let batch = Array(todo.prefix(12))
+                todo.removeFirst(batch.count)
+                let vectors = await Watchdog.map(batch, width: 3, timeout: 60) { it -> [Float]? in
+                    FaceEngine.referencePrint(url: it.url, rotation: it.rotation, rect: it.rect).flatMap(FaceClusterer.vector)
+                }
+                // Unreadable face: an empty vector, so that it is not tried again every time.
+                for (it, v) in zip(batch, vectors) { cache.vectors[it.ref.id] = (v ?? nil) ?? [] }
+                faceGroupDone += batch.count
+                sinceSave += batch.count
+                if sinceSave >= 300 {
+                    sinceSave = 0
+                    let snapshot = cache
+                    Task.detached(priority: .utility) { snapshot.save() }
+                }
+            }
+            let snapshot = cache
+            Task.detached(priority: .utility) { snapshot.save() }
+            let usable = items.compactMap { it -> (ref: FaceRef, vector: [Float])? in
+                guard let v = cache.vectors[it.ref.id], !v.isEmpty else { return nil }
+                return (it.ref, v)
+            }
+            let result = await Task.detached(priority: .userInitiated) { () -> (named: [(Int, String, Double)], clusters: [[Int]]) in
+                // 1. Known people: mean distance to the 3 closest examples, as for recognition.
+                let people = refs.vectors()
+                var named: [(Int, String, Double)] = []
+                var unknown: [Int] = []
+                for (i, u) in usable.enumerated() {
+                    var best: (String, Double)?
+                    for (name, samples) in people {
+                        let ds = samples.map { Double(FaceClusterer.distance(u.vector, $0)) }.sorted().prefix(3)
+                        guard !ds.isEmpty else { continue }
+                        let d = ds.reduce(0, +) / Double(ds.count)
+                        if best == nil || d < best!.1 { best = (name, d) }
+                    }
+                    if let best, best.1 < FaceReferences.threshold { named.append((i, best.0, best.1)) } else { unknown.append(i) }
+                }
+                // 2. The others: grouped by resemblance.
+                let clusters = FaceClusterer.cluster(unknown.map { usable[$0].vector }).map { $0.map { unknown[$0] } }
+                return (named, clusters)
+            }.value
+            // Suggested names are stored with the faces (also shown in the grid and the inspector).
+            for (i, name, score) in result.named {
+                let ref = usable[i].ref
+                if let k = faceIndex(ref) {
+                    metadata[ref.photo]!.faces[k].suggestion = name
+                    metadata[ref.photo]!.faces[k].score = score
+                }
+            }
+            var groups: [FaceGroup] = []
+            let byName = Dictionary(grouping: result.named, by: { $0.1 })
+            for (name, list) in byName.sorted(by: { ($0.value.count, $1.key) > ($1.value.count, $0.key) }) {
+                groups.append(FaceGroup(id: groups.count, faces: list.sorted { $0.2 < $1.2 }.map { usable[$0.0].ref }, suggestion: name))
+            }
+            for c in result.clusters where c.count > 1 {
+                groups.append(FaceGroup(id: groups.count, faces: c.map { usable[$0].ref }, suggestion: nil))
+            }
+            faceGroupSingles = result.clusters.filter { $0.count == 1 }.count
+            faceGroups = groups
+            isGroupingFaces = false
+            Debug.log("visages : \(usable.count) empreintes, \(byName.count) personnes proposées (\(result.named.count) visages), \(result.clusters.filter { $0.count > 1 }.count) groupes inconnus, \(faceGroupSingles) isolés")
+            metadataChanged()
+        }
+    }
+
+    /// Names all the faces of a group at once.
+    func nameFaces(_ refs: [FaceRef], as raw: String, group: Int) {
+        let name = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty else { return }
+        var examples: [(URL, Int, CGRect)] = []
+        for ref in refs {
+            guard let k = faceIndex(ref), var m = metadata[ref.photo] else { continue }
+            m.faces[k].name = name
+            m.faces[k].suggestion = nil
+            m.faces[k].score = nil
+            if !m.people.contains(name) {
+                m.people.append(name)
+                m.people.sort { $0.localizedStandardCompare($1) == .orderedAscending }
+            }
+            metadata[ref.photo] = m
+            if examples.count < 6, let p = photo(id: ref.photo) { examples.append((p.url, m.rotation, faceRect(m.faces[k], in: p))) }
+        }
+        dropFromGroup(refs, group: group)
+        metadataChanged()
+        Task.detached(priority: .utility) { [faceRefs] in
+            guard let known = faceRefs else { return }
+            for (url, rotation, rect) in examples {
+                if let fp = FaceEngine.referencePrint(url: url, rotation: rotation, rect: rect) { known.add(fp, for: name) }
+            }
+            known.save()
+        }
+    }
+
+    /// "Ce ne sont pas des visages" / faces of strangers: the regions are removed.
+    func removeFaces(_ refs: [FaceRef], group: Int) {
+        for ref in refs {
+            guard let k = faceIndex(ref) else { continue }
+            metadata[ref.photo]!.faces.remove(at: k)
+        }
+        dropFromGroup(refs, group: group)
+        metadataChanged()
+    }
+
+    /// Takes faces out of a group without changing them (they stay "à nommer").
+    func dropFromGroup(_ refs: [FaceRef], group: Int) {
+        guard var groups = faceGroups, let g = groups.firstIndex(where: { $0.id == group }) else { return }
+        let gone = Set(refs)
+        groups[g].faces.removeAll { gone.contains($0) }
+        if groups[g].faces.isEmpty { groups.remove(at: g) }
+        faceGroups = groups
+    }
+
+    func closeFaceGroups() { faceGroups = nil }
 
     /// Names a face (and adds it to that person's examples).
     func nameFace(_ photo: Photo, at index: Int, as raw: String) {
@@ -1151,40 +1622,30 @@ final class PhotoLibrary {
 
     /// Each group: the photo to keep first, then the ones to remove.
     private func trashSimilar(in selected: [[String]]) {
-        guard !isTrashing, !selected.isEmpty, let groups = similarGroups else { return }
-        let plan = selected.compactMap { g -> (keep: String, others: [(String, URL)])? in
-            guard g.count > 1 else { return nil }
-            return (g[0], g.dropFirst().compactMap { id in photo(id: id).map { (id, $0.url) } })
-        }
-        isTrashing = true
-        Task {
-            let trashed = await Task.detached(priority: .userInitiated) { () -> [(keep: String, copy: String)] in
-                var done: [(String, String)] = []
-                for g in plan {
-                    for (id, url) in g.others where (try? FileManager.default.trashItem(at: url, resultingItemURL: nil)) != nil {
-                        done.append((g.keep, id))
-                    }
-                }
-                return done
-            }.value
-            for t in trashed {
-                if let m = metadata[t.copy] { metadata[t.keep, default: PhotoMetadata()].merge(m); metadata[t.copy] = nil }
-            }
-            let removed = Set(trashed.map(\.copy))
-            removeFromLibrary(removed)
-            let kept = Set(selected.map { $0[0] })
-            similarGroups = groups.map { g in
-                let rest = g.filter { !removed.contains($0) }
-                guard let k = rest.first(where: kept.contains) else { return rest }
-                return [k] + rest.filter { $0 != k }
-            }.filter { $0.count > 1 }
-            similarBest = Set((similarGroups ?? []).compactMap(\.first))
-            similarRevision += 1
-            isTrashing = false
+        let steps = selected.flatMap { g in g.dropFirst().map { TrashStep(remove: $0, into: g[0]) } }
+        performTrash(steps) { [self] r in
+            let n = r.removed.count
             notice = selected.count == 1
-                ? "\(trashed.count) photo\(trashed.count > 1 ? "s" : "") de la série mise\(trashed.count > 1 ? "s" : "") à la corbeille (récupérable\(trashed.count > 1 ? "s" : "")) ; une photo est conservée."
-                : "\(trashed.count) photos mises à la corbeille (récupérables) ; une photo est conservée dans chacune des \(selected.count) séries."
-            metadataChanged()
+                ? "\(n) photo\(n > 1 ? "s" : "") de la série mise\(n > 1 ? "s" : "") à la corbeille."
+                : "\(n) photos mises à la corbeille ; une photo est conservée dans chacune des \(selected.count) séries."
+        }
+    }
+
+    /// Comparison view: `keep` stay, `remove` go to the Trash (annotations merged into the first
+    /// kept photo), and the series is considered sorted (it leaves the list).
+    func resolveSeries(keep: [Photo], remove: [Photo]) {
+        let ids = Set((keep + remove).map(\.id))
+        func dismiss() {
+            if let g = similarGroups {
+                similarGroups = g.filter { !$0.contains(where: ids.contains) }
+                similarBest = Set((similarGroups ?? []).compactMap(\.first))
+                similarRevision += 1
+            }
+        }
+        guard !remove.isEmpty else { dismiss(); return }
+        performTrash(remove.map { TrashStep(remove: $0.id, into: keep.first?.id) }) { [self] r in
+            dismiss()
+            notice = "\(r.removed.count) photo\(r.removed.count > 1 ? "s" : "") mise\(r.removed.count > 1 ? "s" : "") à la corbeille, \(keep.count) gardée\(keep.count > 1 ? "s" : "")."
         }
     }
 
@@ -1746,6 +2207,8 @@ final class PhotoLibrary {
         personCovers = store.personCovers ?? [:]
         damaged = store.damaged ?? [:]
         lastIntegrityCheck = store.lastIntegrityCheck
+        preferredFolders = store.preferredFolders ?? []
+        smartAlbums = store.smartAlbums ?? []
     }
 
     /// Immediate, synchronous save of the library, index and analysis (before quitting).
@@ -1754,7 +2217,8 @@ final class PhotoLibrary {
         let store = Store(roots: roots.map(\.path), metadata: metadata.filter { !$0.value.isEmpty },
                           picasaImported: picasaImported, albums: albumNames, excluded: excludedPaths,
                           hiddenPeople: hiddenPeople.sorted(), personCovers: personCovers,
-                          damaged: damaged, lastIntegrityCheck: lastIntegrityCheck)
+                          damaged: damaged, lastIntegrityCheck: lastIntegrityCheck,
+                          preferredFolders: preferredFolders, smartAlbums: smartAlbums)
         if let data = try? JSONEncoder().encode(store) { try? data.write(to: storeURL, options: .atomic) }
         IndexStore.save(photos)
         AnalysisStore.save(analysis)
@@ -1764,7 +2228,8 @@ final class PhotoLibrary {
         let store = Store(roots: roots.map(\.path), metadata: metadata,
                           picasaImported: picasaImported, albums: albumNames, excluded: excludedPaths,
                           hiddenPeople: hiddenPeople.sorted(), personCovers: personCovers,
-                          damaged: damaged, lastIntegrityCheck: lastIntegrityCheck)
+                          damaged: damaged, lastIntegrityCheck: lastIntegrityCheck,
+                          preferredFolders: preferredFolders, smartAlbums: smartAlbums)
         let url = storeURL
         Task.detached(priority: .utility) {
             var s = store

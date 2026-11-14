@@ -55,12 +55,14 @@ struct PhotoMetadata: Codable, Equatable {
     var edits: PhotoEdits?
     /// Corrected date (seconds since 1970).
     var date: Double?
+    /// Marked "à jeter" during a keyboard review (the file is still there).
+    var discard = false
 
     init() {}
 
     var isEmpty: Bool {
         rating == 0 && tags.isEmpty && people.isEmpty && albums.isEmpty
-            && caption.isEmpty && rotation == 0 && faces.isEmpty && !facesAnalyzed && !qualityOK && lat == nil && (edits?.isIdentity ?? true) && date == nil
+            && caption.isEmpty && rotation == 0 && faces.isEmpty && !facesAnalyzed && !qualityOK && lat == nil && (edits?.isIdentity ?? true) && date == nil && !discard
     }
 
     /// Amount of user annotation (used to pick which copy to keep among duplicates).
@@ -68,7 +70,7 @@ struct PhotoMetadata: Codable, Equatable {
 
     var hasUnnamedFaces: Bool { faces.contains { $0.name == nil } }
 
-    private enum CodingKeys: String, CodingKey { case rating, tags, people, albums, caption, rotation, faces, facesAnalyzed, qualityOK, lat, lon, edits, date }
+    private enum CodingKeys: String, CodingKey { case rating, tags, people, albums, caption, rotation, faces, facesAnalyzed, qualityOK, lat, lon, edits, date, discard }
 
     // Optional fields: older files stay readable, empty fields are not written.
     init(from decoder: Decoder) throws {
@@ -86,6 +88,7 @@ struct PhotoMetadata: Codable, Equatable {
         lon = try c.decodeIfPresent(Double.self, forKey: .lon)
         edits = try c.decodeIfPresent(PhotoEdits.self, forKey: .edits)
         date = try c.decodeIfPresent(Double.self, forKey: .date)
+        discard = try c.decodeIfPresent(Bool.self, forKey: .discard) ?? false
     }
 
     func encode(to encoder: Encoder) throws {
@@ -103,6 +106,7 @@ struct PhotoMetadata: Codable, Equatable {
         try c.encodeIfPresent(lon, forKey: .lon)
         if let edits, !edits.isIdentity { try c.encode(edits, forKey: .edits) }
         try c.encodeIfPresent(date, forKey: .date)
+        if discard { try c.encode(true, forKey: .discard) }
     }
 
     /// Merges a copy into the kept photo (duplicates).
@@ -163,6 +167,16 @@ enum FaceGeometry {
     }
 }
 
+/// Smart album: a saved search (words, minimum rating, period) that stays up to date.
+struct SmartAlbum: Codable, Hashable, Identifiable {
+    var name: String
+    var query: String
+    var minRating: Int = 0
+    var yearFrom: Int?
+    var yearTo: Int?
+    var id: String { name }
+}
+
 struct FolderSummary: Identifiable, Hashable {
     let path: String
     let name: String
@@ -187,6 +201,8 @@ enum SidebarItem: Hashable {
     case place(String)
     case memories
     case damaged
+    case smart(String)
+    case discards
 }
 
 enum PhotoGrouping: String, CaseIterable, Identifiable {
@@ -385,11 +401,12 @@ enum PhotoScanner {
     }
 
     /// Photos of a disconnected drive, rebuilt from the index.
-    static func offlinePhotos(under root: URL, index: [String: IndexStore.Entry], excluded: [String] = []) -> [Photo] {
+    static func offlinePhotos(under root: URL, index: [String: IndexStore.Entry], excluded: [String] = [], offline: Bool = true) -> [Photo] {
         let prefix = root.path.hasSuffix("/") ? root.path : root.path + "/"
         return index.compactMap { path, e -> Photo? in
             guard path.hasPrefix(prefix), !isExcluded(path, excluded) else { return nil }
-            let url = URL(fileURLWithPath: path)
+            // isDirectory given: otherwise URL asks the disk about every single file.
+            let url = URL(fileURLWithPath: path, isDirectory: false)
             let ext = url.pathExtension.lowercased()
             let folder = url.deletingLastPathComponent().path
             var p = Photo(url: url, folderPath: folder, fileSize: e.s, modificationDate: Date(timeIntervalSince1970: e.m),
@@ -400,7 +417,7 @@ enum PhotoScanner {
             p.longitude = e.lo
             p.orientation = e.o ?? 1
             p.exifChecked = true
-            p.offline = true
+            p.offline = offline
             return p
         }
     }

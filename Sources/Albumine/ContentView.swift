@@ -32,6 +32,15 @@ struct ContentView: View {
     @Etat private var yearFrom: Int?
     @Etat private var yearTo: Int?
     @Etat private var yearAnchors: [(year: Int, id: String)] = []
+    // Duplicates: list of folder pairs instead of groups, and groups limited to one pair.
+    @Etat private var duplicatesByFolder = false
+    @Etat private var pairFilter: PhotoLibrary.DuplicateFolderPair?
+    // Comparison view: series to go through, starting position, and whether they are similar series.
+    @Etat private var compareSeries: [[Photo]]?
+    @Etat private var compareStart = 0
+    @Etat private var compareIsSimilar = false
+    @Etat private var savingSmartAlbum = false
+    @Etat private var smartAlbumName = ""
     @FocusState private var gridFocused: Bool
 
     /// Everything that affects the displayed list. It is recomputed only when this changes.
@@ -48,6 +57,8 @@ struct ContentView: View {
         var sort: PhotoSort
         var grouping: PhotoGrouping
         var minRating: Int
+        var pairFilter: String?
+        var smartAlbums: [SmartAlbum]
     }
 
     private var filterKey: FilterKey {
@@ -57,15 +68,22 @@ struct ContentView: View {
                   mapTick: sidebar == .map ? library.exifDone / 2000 : 0,
                   memoryCount: sidebar == .memories ? library.memoryIDs.count : 0,
                   yearFrom: yearFrom, yearTo: yearTo,
-                  sidebar: sidebar, search: search, sort: sort, grouping: grouping, minRating: minRating)
+                  sidebar: sidebar, search: search, sort: sort, grouping: grouping, minRating: minRating,
+                  pairFilter: sidebar == .duplicates ? pairFilter?.id : nil,
+                  smartAlbums: isSmart ? library.smartAlbums : [])
     }
 
     /// The list depends on ratings/tags/people only in some views:
     /// elsewhere, rating a photo recomputes nothing.
+    private var isSmart: Bool {
+        if case .smart = sidebar ?? .all { return true }
+        return false
+    }
+
     private var dependsOnMetadata: Bool {
         if minRating > 0 || !search.isEmpty { return true }
         switch sidebar ?? .all {
-        case .starred, .tag, .person, .album, .unnamedFaces, .duplicates, .similar, .rejects: return true
+        case .starred, .tag, .person, .album, .unnamedFaces, .duplicates, .similar, .rejects, .smart, .discards: return true
         default: return false
         }
     }
@@ -73,7 +91,7 @@ struct ContentView: View {
     private var dependsOnAnalysis: Bool {
         if !search.isEmpty || grouping == .event { return true }
         switch sidebar ?? .all {
-        case .similar, .rejects, .place: return true
+        case .similar, .rejects, .place, .smart: return true
         default: return false
         }
     }
@@ -84,14 +102,25 @@ struct ContentView: View {
                 .navigationSplitViewColumnWidth(min: 210, ideal: 250, max: 340)
         } detail: {
             detail
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .navigationTitle(title)
                 .navigationSubtitle(subtitle)
-                .alert("Albumine", isPresented: Binding(get: { library.notice != nil },
-                                                        set: { if !$0 { library.notice = nil } })) {
-                    Button("OK") { library.notice = nil }
-                } message: {
-                    Text(library.notice ?? "")
+                .overlay(alignment: .bottom) {
+                    if let notice = library.notice {
+                        NoticeToast(text: notice,
+                                    undo: library.canUndoTrash && notice == library.undoNotice ? { library.undoLastTrash() } : nil) {
+                            library.notice = nil
+                        }
+                        .padding(.bottom, 18)
+                        .transition(.move(edge: .bottom).combined(with: .opacity))
+                        .task(id: notice) {
+                            // Stays longer when it offers to undo.
+                            try? await Task.sleep(for: .seconds(notice == library.undoNotice ? 12 : 7))
+                            if !Task.isCancelled, library.notice == notice { library.notice = nil }
+                        }
+                    }
                 }
+                .animation(.easeOut(duration: 0.2), value: library.notice)
         }
         .searchable(text: $search, placement: .toolbar, prompt: "Personne, lieu, contenu, année, album…")
         .searchSuggestions { searchSuggestions }
@@ -107,6 +136,28 @@ struct ContentView: View {
                 SlideshowView(photos: list) { slideshowPhotos = nil; gridFocused = true }
             }
         }
+        .overlay {
+            if let series = compareSeries {
+                CompareView(series: series, start: compareStart, isSeries: compareIsSimilar) { keep, remove in
+                    if compareIsSimilar { library.resolveSeries(keep: keep, remove: remove) }
+                    else if !remove.isEmpty { library.trash(remove); selection.removeAll() }
+                } onClose: { compareSeries = nil; gridFocused = true }
+            }
+        }
+        .alert("Nouvel album intelligent", isPresented: $savingSmartAlbum) {
+            TextField("Nom", text: $smartAlbumName)
+            Button("Enregistrer") {
+                let name = smartAlbumName.trimmingCharacters(in: .whitespaces)
+                guard !name.isEmpty else { return }
+                library.saveSmartAlbum(SmartAlbum(name: name, query: search.trimmingCharacters(in: .whitespaces),
+                                                  minRating: minRating, yearFrom: yearFrom, yearTo: yearTo))
+                search = ""; minRating = 0; yearFrom = nil; yearTo = nil
+                sidebar = .smart(name)
+            }
+            Button("Annuler", role: .cancel) {}
+        } message: {
+            Text("La recherche et les filtres actuels sont enregistrés : l'album se met à jour tout seul quand de nouvelles photos correspondent.")
+        }
         .sheet(isPresented: Binding(get: { exportPhotos != nil }, set: { if !$0 { exportPhotos = nil } })) {
             ExportSheet(photos: exportPhotos ?? [])
         }
@@ -120,6 +171,9 @@ struct ContentView: View {
             UpdateSheet()
         }
         .task { Updater.shared.checkAtLaunch() }
+        #if DEBUG
+        .task { await debugScenario() }
+        #endif
         .animation(.easeInOut(duration: 0.15), value: viewerList == nil)
         .alert(
             "Import Picasa terminé",
@@ -140,6 +194,75 @@ struct ContentView: View {
             Debug.log("liste : \(visible.count) éléments, \(groups.count) groupes en \(Int(Date().timeIntervalSince(start) * 1000)) ms")
         }
     }
+
+    #if DEBUG
+    /// Tests: ALBUMINE_SCENARIO opens a given screen and ALBUMINE_SNAPSHOT_DIR receives PNG
+    /// captures of the window (drawn by the app itself, no screen recording needed).
+    private func debugScenario() async {
+        let env = ProcessInfo.processInfo.environment
+        guard let scenario = env["ALBUMINE_SCENARIO"], let dir = env["ALBUMINE_SNAPSHOT_DIR"] else { return }
+        func snap(_ name: String, wait: Double = 2.5) async {
+            try? await Task.sleep(for: .seconds(wait))
+            guard let view = NSApp.windows.first(where: { $0.isVisible && $0.contentView != nil })?.contentView,
+                  let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { return }
+            view.cacheDisplay(in: view.bounds, to: rep)
+            try? rep.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: dir).appendingPathComponent(name + ".png"))
+            Debug.log("capture : \(name)")
+        }
+        while library.isScanning || library.photoCount == 0 { try? await Task.sleep(for: .milliseconds(200)) }
+        try? await Task.sleep(for: .seconds(1))
+        let photos = library.byDateNewest
+        switch scenario {
+        case "dupfolders":
+            sidebar = .duplicates
+            library.findDuplicates()
+            while library.duplicateGroups == nil || library.isFindingDuplicates { try? await Task.sleep(for: .milliseconds(200)) }
+            await snap("dup-groups")
+            duplicatesByFolder = true
+            await snap("dup-folders")
+            if let pair = library.duplicateFolderPairs.first(where: { !$0.isInternal }) {
+                library.keepFolder(pair.a, in: pair)
+                await snap("dup-toast-undo", wait: 2)
+            }
+        case "compare":
+            compareIsSimilar = true
+            compareSeries = [Array(photos.prefix(3)), Array(photos.dropFirst(3).prefix(5))]
+            await snap("compare-3", wait: 5)
+        case "compare5":
+            compareIsSimilar = true
+            compareSeries = [Array(photos.dropFirst(3).prefix(5))]
+            await snap("compare-5", wait: 5)
+        case "discards":
+            library.setDiscard(Array(photos.prefix(2)), true)
+            await snap("grid-discard-badges")
+            open(visible, at: 0)
+            await snap("viewer-discard", wait: 4)
+            viewerList = nil
+            sidebar = .discards
+            await snap("discards-view")
+        case "smart":
+            library.setRating(4, for: Array(photos.prefix(3)))
+            library.saveSmartAlbum(SmartAlbum(name: "Mes 4 étoiles", query: "", minRating: 4))
+            sidebar = .smart("Mes 4 étoiles")
+            await snap("smart-album")
+            sidebar = .rejects
+            await snap("rejects")
+        case "faces":
+            sidebar = .all
+            library.analyzeFaces(in: photos)
+            try? await Task.sleep(for: .seconds(2))
+            while library.isAnalyzingFaces || library.facePreparing { try? await Task.sleep(for: .milliseconds(300)) }
+            library.notice = nil
+            sidebar = .unnamedFaces
+            await snap("faces-grid")
+            library.groupUnknownFaces()
+            while library.isGroupingFaces { try? await Task.sleep(for: .milliseconds(300)) }
+            await snap("faces-groups", wait: 5)
+        default: break
+        }
+        Debug.log("scénario terminé")
+    }
+    #endif
 
     // MARK: Viewer
 
@@ -188,6 +311,37 @@ struct ContentView: View {
             duplicatesIntro
         } else if item == .similar, library.similarGroups == nil || library.isFindingSimilar {
             similarIntro
+        } else if item == .unnamedFaces, library.faceGroups != nil || library.isGroupingFaces {
+            Group {
+                if library.isGroupingFaces {
+                    ContentUnavailableView {
+                        Label("Regroupement des visages", systemImage: "person.2.crop.square.stack")
+                    } description: {
+                        VStack(spacing: 8) {
+                            ProgressView(value: Double(library.faceGroupDone), total: Double(max(library.faceGroupTotal, 1)))
+                                .frame(width: 260)
+                            Text("Lecture de \(library.faceGroupDone.formatted()) / \(library.faceGroupTotal.formatted()) visages…")
+                        }
+                    } actions: {
+                        Button("Arrêter") { library.cancelFaceGrouping() }
+                    }
+                } else {
+                    FaceGroupsView { photo in open([photo], at: 0) }
+                }
+            }
+            .safeAreaInset(edge: .top, spacing: 0) { facesBar.padding(.top, 6) }
+        } else if item == .duplicates, duplicatesByFolder, !(library.duplicateGroups ?? []).isEmpty {
+            DuplicateFoldersView { pair in
+                pairFilter = pair
+                duplicatesByFolder = false
+            }
+            .safeAreaInset(edge: .top, spacing: 0) { duplicatesBar.padding(.top, 6) }
+        } else if visible.isEmpty, pairFilter != nil, item == .duplicates {
+            ContentUnavailableView {
+                Label("Plus de doublon entre ces deux dossiers", systemImage: "checkmark.circle")
+            } actions: {
+                Button("Revenir à la liste des dossiers") { pairFilter = nil; duplicatesByFolder = true }
+            }
         } else if visible.isEmpty {
             emptyState(item)
         } else {
@@ -202,6 +356,7 @@ struct ContentView: View {
                         if item == .unnamedFaces { facesBar }
                         if item == .similar { similarBar }
                         if item == .rejects { rejectsBar }
+                        if item == .discards { discardsBar }
                         if item == .damaged { damagedBar }
                         if item == .all || item == .rejects || item == .similar { analysisBanner }
                     }
@@ -335,7 +490,7 @@ struct ContentView: View {
             let suggestions = library.faces(of: photo).filter { $0.name == nil }.compactMap(\.suggestion)
             return suggestions.isEmpty ? nil : Set(suggestions).sorted().joined(separator: ", ") + " ?"
         default:
-            return nil
+            return library.isDiscarded(photo) ? "À jeter" : nil
         }
     }
 
@@ -368,6 +523,26 @@ struct ContentView: View {
         }
         if sidebar == .duplicates || sidebar == .similar {
             seriesMenu(for: photo, targets: targets)
+        }
+        if sidebar == .duplicates {
+            let folder = photo.folderPath
+            Toggle("Toujours garder les copies du dossier « \(photo.folderName) »", isOn: Binding(
+                get: { library.isPreferredFolder(folder) }, set: { library.setPreferredFolder(folder, $0) }))
+            Divider()
+        }
+        if sidebar == .similar, let i = (library.similarGroups ?? []).firstIndex(where: { $0.contains(photo.id) }) {
+            Button("Comparer cette série…") { compareSimilar(from: i) }
+        } else if targets.count > 1, targets.count <= 12, !targets.contains(where: \.isVideo) {
+            Button("Comparer les \(targets.count) photos…") {
+                compareIsSimilar = false
+                compareStart = 0
+                compareSeries = [targets.sorted { $0.date < $1.date }]
+            }
+        }
+        if targets.contains(where: { !library.isDiscarded($0) }) {
+            Button("Marquer « à jeter »") { library.setDiscard(targets, true) }
+        } else {
+            Button("Ne plus jeter") { library.setDiscard(targets, false) }
         }
         Button("Analyser les visages") { library.analyzeFaces(in: targets) }
         Divider()
@@ -483,13 +658,44 @@ struct ContentView: View {
         return Banner(systemImage: "square.on.square") {
             Text("\(library.duplicateGroups?.count ?? 0) groupes · \(waste.count.formatted()) copies en trop (\(ByteCountFormatter.string(fromByteCount: waste.bytes, countStyle: .file)))")
                 .font(.headline)
-            Text("Dans chaque groupe, la copie « À garder » est conservée (la plus annotée, sinon la plus ancienne). Les autres vont à la corbeille ; leurs notes, personnes et albums sont reportés.")
-                .font(.caption).foregroundStyle(.secondary)
+            if let pair = pairFilter, !duplicatesByFolder {
+                HStack(spacing: 6) {
+                    Text(pair.isInternal ? "Seulement : copies à l'intérieur de « \((pair.a as NSString).lastPathComponent) »"
+                         : "Seulement : « \((pair.a as NSString).lastPathComponent) » ↔ « \((pair.b as NSString).lastPathComponent) »")
+                    Button { pairFilter = nil } label: { Image(systemName: "xmark.circle.fill") }
+                        .buttonStyle(.plain).foregroundStyle(.secondary).help("Afficher tous les groupes")
+                }
+                .font(.caption)
+            } else if duplicatesByFolder {
+                Text("Dossiers qui contiennent les mêmes fichiers. Gardez un dossier : ses copies restent, celles de l'autre vont à la corbeille. Les fichiers qui ne sont pas en double ne sont jamais touchés.")
+                    .font(.caption).foregroundStyle(.secondary)
+            } else {
+                Text("Dans chaque groupe, la copie « À garder » est conservée (dossier prioritaire, sinon la plus annotée, sinon la plus ancienne). Les autres vont à la corbeille ; leurs notes, personnes et albums sont reportés.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
         } actions: {
+            Picker("", selection: $duplicatesByFolder) {
+                Text("Par groupe").tag(false)
+                Text("Par dossier").tag(true)
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .fixedSize()
+            if !library.preferredFolders.isEmpty {
+                Menu("Dossiers prioritaires (\(library.preferredFolders.count))") {
+                    ForEach(library.preferredFolders, id: \.self) { path in
+                        Button("Retirer « \((path as NSString).lastPathComponent) »") { library.setPreferredFolder(path, false) }
+                    }
+                }
+                .fixedSize()
+                .help("Les copies de ces dossiers (et de leurs sous-dossiers) sont toujours celles gardées")
+            }
             Button("Relancer") { library.findDuplicates() }
-            Button("Mettre les copies à la corbeille…") { confirmTrashCopies = true }
-                .buttonStyle(.borderedProminent)
-                .disabled(waste.count == 0 || library.isTrashing)
+            if !duplicatesByFolder, pairFilter == nil {
+                Button("Mettre les copies à la corbeille…") { confirmTrashCopies = true }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(waste.count == 0 || library.isTrashing)
+            }
         }
         .confirmationDialog("Mettre \(waste.count.formatted()) copies à la corbeille ?", isPresented: $confirmTrashCopies) {
             Button("Mettre les copies à la corbeille", role: .destructive) { library.trashDuplicateCopies() }
@@ -532,11 +738,34 @@ struct ContentView: View {
             Button("Garder la meilleure de chaque série…") { confirmTrashSimilar = true }
                 .buttonStyle(.borderedProminent)
                 .disabled(library.similarExtras == 0 || library.isTrashing)
+            Button("Comparer…") { compareSimilar(from: 0) }
+                .help("Voir les photos de chaque série côte à côte et choisir au clavier")
         }
         .confirmationDialog("Mettre \(library.similarExtras.formatted()) photos à la corbeille ?", isPresented: $confirmTrashSimilar) {
             Button("Garder la meilleure de chaque série", role: .destructive) { library.trashSimilarExtras() }
         } message: {
             Text("Les autres photos de chaque série vont dans la Corbeille du disque (récupérables). Leurs notes, personnes et albums sont reportés sur la photo gardée.")
+        }
+    }
+
+    private func compareSimilar(from index: Int) {
+        let series = (library.similarGroups ?? []).map { $0.compactMap { library.photo(id: $0) } }
+        guard index < series.count else { return }
+        compareIsSimilar = true
+        compareStart = index
+        compareSeries = series
+    }
+
+    private var discardsBar: some View {
+        Banner(systemImage: "trash") {
+            Text("Photos marquées « à jeter »").font(.headline)
+            Text("Marquées avec la touche X dans la visionneuse. Elles sont encore sur le disque tant que vous ne les mettez pas à la corbeille.")
+                .font(.caption).foregroundStyle(.secondary)
+        } actions: {
+            Button("Tout garder finalement") { library.setDiscard(visible, false) }
+            Button("Mettre les \(visible.count.formatted()) à la corbeille…") { photosToTrash = visible }
+                .buttonStyle(.borderedProminent)
+                .disabled(library.isTrashing)
         }
     }
 
@@ -730,9 +959,16 @@ struct ContentView: View {
             Text("Sélectionnez des photos puis confirmez, ou nommez chaque visage dans l'inspecteur. Touche F dans la visionneuse : voir les cadres.")
                 .font(.caption).foregroundStyle(.secondary)
         } actions: {
-            Button("Confirmer la sélection") { library.acceptSuggestions(in: selectedPhotos) }
-                .buttonStyle(.borderedProminent)
-                .disabled(selection.isEmpty)
+            if library.faceGroups != nil {
+                Button("Revenir à la grille") { library.closeFaceGroups() }
+                Button("Regrouper à nouveau") { library.groupUnknownFaces() }
+            } else if !library.isGroupingFaces {
+                Button("Regrouper par personne") { library.groupUnknownFaces() }
+                    .help("Réunit les visages qui se ressemblent pour les nommer par paquets")
+                Button("Confirmer la sélection") { library.acceptSuggestions(in: selectedPhotos) }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(selection.isEmpty)
+            }
         }
     }
 
@@ -787,6 +1023,14 @@ struct ContentView: View {
 
     // MARK: Filtering and grouping
 
+    private func filter(_ list: [Photo], from yearFrom: Int?, to yearTo: Int?) -> [Photo] {
+        guard yearFrom != nil || yearTo != nil else { return list }
+        let cal = Calendar.current
+        let from = yearFrom.flatMap { cal.date(from: DateComponents(year: $0, month: 1, day: 1)) } ?? .distantPast
+        let to = yearTo.flatMap { cal.date(from: DateComponents(year: $0 + 1, month: 1, day: 1)) } ?? .distantFuture
+        return list.filter { $0.date >= from && $0.date < to }
+    }
+
     private func computeList() -> ([Photo], [PhotoGroup]) {
         let item = sidebar ?? .all
         if item == .duplicates { return duplicateList() }
@@ -810,13 +1054,18 @@ struct ContentView: View {
         case .place(let name): list = list.filter { library.placeName(of: $0) == name }
         case .memories: list = list.filter { library.memoryIDs.contains($0.id) }
         case .damaged: list = library.photos.filter { library.damageReason(of: $0) != nil }
+        case .discards: list = list.filter { library.isDiscarded($0) }
+        case .smart(let name):
+            if let album = library.smartAlbums.first(where: { $0.name == name }) {
+                list = filter(list, from: album.yearFrom, to: album.yearTo)
+                if album.minRating > 0 { list = list.filter { library.rating(of: $0) >= album.minRating } }
+                let words = album.query.searchFolded.split(separator: " ").map(String.init)
+                if !words.isEmpty { list = list.filter { library.matches($0, tokens: words) } }
+            } else {
+                list = []
+            }
         }
-        if yearFrom != nil || yearTo != nil {
-            let cal = Calendar.current
-            let from = yearFrom.flatMap { cal.date(from: DateComponents(year: $0, month: 1, day: 1)) } ?? .distantPast
-            let to = yearTo.flatMap { cal.date(from: DateComponents(year: $0 + 1, month: 1, day: 1)) } ?? .distantFuture
-            list = list.filter { $0.date >= from && $0.date < to }
-        }
+        list = filter(list, from: yearFrom, to: yearTo)
         if minRating > 0 {
             list = list.filter { library.rating(of: $0) >= minRating }
         }
@@ -978,7 +1227,8 @@ struct ContentView: View {
     private func duplicateList() -> ([Photo], [PhotoGroup]) {
         var list: [Photo] = []
         var groups: [PhotoGroup] = []
-        for (n, ids) in (library.duplicateGroups ?? []).enumerated() {
+        let source = pairFilter.map { library.duplicateGroups(in: $0) } ?? library.duplicateGroups ?? []
+        for (n, ids) in source.enumerated() {
             let items = ids.compactMap { library.photo(id: $0) }
             guard items.count > 1 else { continue }
             let start = list.count
@@ -1008,6 +1258,8 @@ struct ContentView: View {
         case .place(let name): return name
         case .memories: return "Souvenirs du jour"
         case .damaged: return "Fichiers abîmés"
+        case .smart(let name): return name
+        case .discards: return "À jeter"
         }
     }
 
@@ -1058,6 +1310,9 @@ struct ContentView: View {
                         Text(String(repeating: "★", count: n) + " et plus").tag(n)
                     }
                 }
+                Divider()
+                Button("Enregistrer comme album intelligent…") { smartAlbumName = search; savingSmartAlbum = true }
+                    .disabled(search.trimmingCharacters(in: .whitespaces).isEmpty && minRating == 0 && yearFrom == nil && yearTo == nil)
             } label: {
                 Label("Regrouper, trier et filtrer", systemImage: minRating > 0 || yearFrom != nil || yearTo != nil
                       ? "line.3.horizontal.decrease.circle.fill" : "line.3.horizontal.decrease.circle")
@@ -1243,7 +1498,7 @@ struct CellBadge: View {
             .foregroundStyle(.white)
             .padding(.horizontal, 5)
             .padding(.vertical, 2)
-            .background(Color.green.opacity(0.85), in: Capsule())
+            .background((text == "À jeter" ? Color.red : Color.green).opacity(0.85), in: Capsule())
     }
 }
 

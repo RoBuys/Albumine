@@ -36,6 +36,10 @@ struct AlbumineApp: App {
                     .disabled(library.isImportingPicasa)
             }
             CommandMenu("Bibliothèque") {
+                Button("Annuler la dernière mise à la corbeille") { library.undoLastTrash() }
+                    .keyboardShortcut("z", modifiers: [.command, .shift])
+                    .disabled(!library.canUndoTrash)
+                Divider()
                 Button("Importer les fichiers XMP (Mylio, Lightroom…)") { library.importSidecars() }
                     .disabled(library.isImportingXMP || library.sidecarCount == 0)
                 Divider()

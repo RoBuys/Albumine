@@ -51,6 +51,18 @@ GitHub release with `Albumine-1.1.zip` and `Albumine-1.1.zip.sig`. The signing k
 login Keychain ("Albumine update signing key", see `Resources/update-key.swift`); **back it up** —
 without it, installed copies cannot be updated automatically anymore.
 
+### Signing with an Apple Developer ID (optional)
+
+By default the app is ad-hoc signed, hence the Gatekeeper warning on first launch. With a paid Apple
+Developer account, the warning disappears:
+
+1. Create a **Developer ID Application** certificate (developer.apple.com › Certificates) and install it
+   in the login Keychain. `build.sh` then signs with it automatically (hardened runtime, timestamp);
+   `ALBUMINE_SIGN_ID` selects a specific identity.
+2. Store notarization credentials once:
+   `xcrun notarytool store-credentials albumine-notary --apple-id <id> --team-id <team> --password <app-specific password>`
+3. `release.sh` then notarizes and staples the app before zipping and signing the update archive.
+
 ## Features
 
 - **Folders**: add (⌘O, toolbar button, drag and drop), recursive scan, rescan (⌘R);
@@ -61,12 +73,19 @@ without it, installed copies cannot be updated automatically anymore.
 - **Videos** (MOV, MP4, M4V, 3GP…; AVI/WMV are listed and opened in the default app):
   thumbnail, playback in the viewer, date and location read from metadata
 - **Viewer**: double-click or Return/Space; ← →; F shows face frames; E opens the editor; Esc closes
+- **Quick sorting** in the viewer: X marks a photo "à jeter" (to discard) and moves on, G keeps it;
+  marked photos gather in the "À jeter" view, from which they are moved to the Trash in one go
+- **Undo for the Trash**: every move to the Trash can be undone ("Annuler" in the message, or
+  Bibliothèque › "Annuler la dernière mise à la corbeille", ⇧⌘Z): files, ratings, people and albums come back
 - **Ratings** 0–5 stars (keys 0–5), **tags**, **captions**, display **rotation**
 - **Virtual albums**: a photo can be in several albums without being copied; create (+), drag photos
   onto an album, right-click › "Ajouter à l'album" (Add to album), rename, delete (photos are kept)
 - **People / faces**: detection and recognition with Apple's Vision framework (on-device, nothing is
   uploaded). Already named faces serve as examples; new faces get a *suggested* name to confirm in
   "Visages à nommer" (Faces to name) or in the inspector
+- **Grouping unknown faces** ("Visages à nommer" › "Regrouper par personne"): faces that resemble a
+  known person are gathered under a suggested name, the other look-alike faces form groups; a whole
+  group is named at once (click a face to set it aside)
 - **People management**: rename, merge (likely duplicates detected: case, accents, first name only),
   hide, profile picture (portrait in the sidebar) — Settings › Personnes (People) or right-click
 - **Content search**: "plage" (beach), "neige" (snow), "chien" (dog)… — 1,300 categories recognized by
@@ -83,6 +102,8 @@ without it, installed copies cannot be updated automatically anymore.
 - **Timeline** on the edge of the grid and a **period filter** (from / until a given year)
 - **Combined search with suggestions**: e.g. "Sacha plage 2012"; people, places, albums, tags,
   content and years are suggested while typing
+- **Smart albums**: save the current search and filters (words, minimum rating, period) as an album
+  that stays up to date (filter menu › "Enregistrer comme album intelligent…")
 - **Search** covers file name, folder, person, album, tag, caption, content, text, place, camera,
   year (accent-insensitive)
 - **Non-destructive editing** (viewer, key E): "J'ai de la chance" (auto-enhance), exposure, contrast,
@@ -93,9 +114,14 @@ without it, installed copies cannot be updated automatically anymore.
 - **Exact duplicates**: same size + fingerprint (remembered: after the first search, only new files are read), then byte-by-byte comparison before removal; the most
   annotated copy is kept, the others go **to the Trash** (recoverable) and their ratings, people and
   albums are carried over; right-click a group › keep the marked copy, or keep the copy you clicked
+- **Duplicates by folder** ("Par dossier"): pairs of folders holding the same files, most copies first;
+  "Garder ce dossier" moves the identical files of the other folder to the Trash, "Voir" shows them.
+  **Priority folders** ("Toujours garder les copies de ce dossier") decide which copy is kept everywhere
 - **Similar photos**: bursts and resized versions (perceptual hash + time proximity);
   "keep the best of each series" (best according to Vision and your annotations), or per series from
   the right-click menu: keep the best one, or keep the photo you clicked
+- **Comparison view** ("Comparer…", or right-click a selection): photos side by side with a shared
+  zoom; 1–9 keep or discard a photo, Return applies and moves to the next series
 - **Failed photos**: blurry, too dark, overexposed, screenshots and documents, poor shots;
   a click adds a photo to the selection (⇧-click: range, ⌘A: all), then move the selection to the Trash;
   "Ce n'est pas raté" (Not a failure) removes a photo from the list
@@ -111,7 +137,8 @@ without it, installed copies cannot be updated automatically anymore.
 - **Integrity check**: detects empty, truncated or unreadable files ("Fichiers abîmés" / Damaged files view)
 - **Inspector**: EXIF (date, dimensions, camera, lens, settings, GPS → Maps), recognized content and
   text, faces, people, albums
-- **Large libraries**: instant listing, metadata read in the background, persistent index, on-disk
+- **Large libraries**: instant startup (the library is shown from the index while the drive is read
+  in the background), instant listing, metadata read in the background, persistent index, on-disk
   thumbnail cache, throttled disk reads to keep the grid smooth
 
 ## Picasa import
@@ -141,6 +168,7 @@ raw image orientation (before EXIF rotation); Albumine converts them. Hidden `Or
 - `~/Library/Application Support/Albumine/analysis.json`: content analysis (categories, quality, text, fingerprints)
 - `~/Library/Application Support/Albumine/places.json`: place names
 - `~/Library/Application Support/Albumine/xmp-state.json`: last state written to each XMP sidecar
+- `~/Library/Application Support/Albumine/face-vectors.plist`: fingerprints of unnamed faces (grouping)
 - `~/Library/Application Support/Albumine/duplicate-hashes.json`: duplicate fingerprints (only new or modified files are read again)
 - `~/Library/Caches/Albumine/Miniatures`: thumbnails (safe to delete)
 

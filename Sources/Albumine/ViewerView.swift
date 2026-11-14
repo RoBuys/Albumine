@@ -2,7 +2,8 @@ import SwiftUI
 import AppKit
 import AVKit
 
-/// Full-window viewer: ← → to navigate, 0–5 to rate, F for faces, E to edit, Esc to close.
+/// Full-window viewer: ← → to navigate, 0–5 to rate, X to mark "à jeter", G to keep,
+/// F for faces, E to edit, Esc to close.
 struct ViewerView: View {
     @Environment(PhotoLibrary.self) private var library
     let photos: [Photo]
@@ -44,6 +45,19 @@ struct ViewerView: View {
                 ProgressView().controlSize(.large)
             }
 
+            if !editing, library.isDiscarded(photo) {
+                VStack {
+                    Spacer()
+                    Label("À jeter", systemImage: "trash")
+                        .font(.headline)
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 14).padding(.vertical, 7)
+                        .background(Color.red.opacity(0.85), in: Capsule())
+                        .padding(.bottom, 76)
+                }
+                .allowsHitTesting(false)
+            }
+
             if !editing { chrome }
         }
         .overlay {
@@ -66,6 +80,20 @@ struct ViewerView: View {
         .onKeyPress(characters: CharacterSet(charactersIn: "eE")) { _ in
             guard !editing, !photo.isVideo, !photo.offline else { return .ignored }
             editing = true
+            return .handled
+        }
+        // Quick sorting: X marks "à jeter", G keeps; both move on to the next photo.
+        .onKeyPress(characters: CharacterSet(charactersIn: "xX")) { _ in
+            guard !editing else { return .ignored }
+            let mark = !library.isDiscarded(photo)
+            library.setDiscard([photo], mark)
+            if mark { go(1) }
+            return .handled
+        }
+        .onKeyPress(characters: CharacterSet(charactersIn: "gG")) { _ in
+            guard !editing else { return .ignored }
+            library.setDiscard([photo], false)
+            go(1)
             return .handled
         }
         .onKeyPress(characters: CharacterSet(charactersIn: "012345")) { press in
@@ -157,8 +185,25 @@ struct ViewerView: View {
                     .padding(.leading, 12)
                 }
                 Spacer()
-                StarRatingPicker(rating: library.rating(of: photo), size: 20) { n in
-                    library.setRating(n, for: [photo])
+                HStack(spacing: 14) {
+                    StarRatingPicker(rating: library.rating(of: photo), size: 20) { n in
+                        library.setRating(n, for: [photo])
+                    }
+                    Divider().frame(height: 18).overlay(.white.opacity(0.3))
+                    Button {
+                        library.setDiscard([photo], false)
+                        go(1)
+                    } label: { Label("Garder", systemImage: "checkmark") }
+                        .buttonStyle(.plain)
+                        .help("Garder et passer à la suivante (G)")
+                    Button {
+                        let mark = !library.isDiscarded(photo)
+                        library.setDiscard([photo], mark)
+                        if mark { go(1) }
+                    } label: { Label(library.isDiscarded(photo) ? "Ne plus jeter" : "À jeter", systemImage: "trash") }
+                        .buttonStyle(.plain)
+                        .foregroundStyle(library.isDiscarded(photo) ? .red : .white)
+                        .help("Marquer « à jeter » et passer à la suivante (X). Rien n'est supprimé : les photos marquées se retrouvent dans « À jeter ».")
                 }
                 .padding(.horizontal, 14)
                 .padding(.vertical, 8)

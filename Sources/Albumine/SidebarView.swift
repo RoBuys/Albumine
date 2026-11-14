@@ -12,6 +12,7 @@ struct SidebarView: View {
     @Etat private var deletingAlbum: String?
     @Etat private var albumName = ""
     @Etat private var renamingPerson: String?
+    @Etat private var renamingSmart: String?
     @Etat private var personName = ""
 
     var body: some View {
@@ -43,6 +44,11 @@ struct SidebarView: View {
                 Label("Photos ratées", systemImage: "hand.thumbsdown")
                     .badge(library.rejectCount)
                     .tag(SidebarItem.rejects)
+                if library.discardCount > 0 {
+                    Label("À jeter", systemImage: "trash")
+                        .badge(library.discardCount)
+                        .tag(SidebarItem.discards)
+                }
                 if !library.damaged.isEmpty {
                     Label("Fichiers abîmés", systemImage: "exclamationmark.triangle")
                         .badge(library.damaged.count)
@@ -116,6 +122,23 @@ struct SidebarView: View {
                 }
             }
 
+            if !library.smartAlbums.isEmpty {
+                Section("Albums intelligents") {
+                    ForEach(library.smartAlbums) { album in
+                        Label(album.name, systemImage: "gearshape.2")
+                            .tag(SidebarItem.smart(album.name))
+                            .help(smartSummary(album))
+                            .contextMenu {
+                                Button("Renommer…") { albumName = album.name; renamingSmart = album.name }
+                                Button("Supprimer l'album intelligent", role: .destructive) {
+                                    if selection == .smart(album.name) { selection = .all }
+                                    library.deleteSmartAlbum(album.name)
+                                }
+                            }
+                    }
+                }
+            }
+
             let tags = library.allTags
             if !tags.isEmpty {
                 Section("Étiquettes") {
@@ -186,6 +209,21 @@ struct SidebarView: View {
         } message: {
             Text("Un album regroupe des photos de n'importe quels dossiers, sans les copier.")
         }
+        .alert("Renommer l'album intelligent", isPresented: Binding(get: { renamingSmart != nil },
+                                                                    set: { if !$0 { renamingSmart = nil } })) {
+            TextField("Nom", text: $albumName)
+            Button("Renommer") {
+                if let old = renamingSmart {
+                    let wasSelected = selection == .smart(old)
+                    library.renameSmartAlbum(old, to: albumName)
+                    if wasSelected, library.smartAlbums.contains(where: { $0.name == albumName.trimmingCharacters(in: .whitespaces) }) {
+                        selection = .smart(albumName.trimmingCharacters(in: .whitespaces))
+                    }
+                }
+                renamingSmart = nil
+            }
+            Button("Annuler", role: .cancel) { renamingSmart = nil }
+        }
         .alert("Renommer l'album", isPresented: Binding(get: { renamingAlbum != nil },
                                                         set: { if !$0 { renamingAlbum = nil } })) {
             TextField("Nom de l'album", text: $albumName)
@@ -211,6 +249,16 @@ struct SidebarView: View {
         } message: {
             Text("Les photos ne sont pas supprimées, seulement retirées de cet album.")
         }
+    }
+
+    private func smartSummary(_ a: SmartAlbum) -> String {
+        var parts: [String] = []
+        if !a.query.isEmpty { parts.append("« \(a.query) »") }
+        if a.minRating > 0 { parts.append(String(repeating: "★", count: a.minRating) + " et plus") }
+        if let f = a.yearFrom, let t = a.yearTo { parts.append(f == t ? String(f) : "\(f) – \(t)") }
+        else if let f = a.yearFrom { parts.append("depuis \(f)") }
+        else if let t = a.yearTo { parts.append("jusqu'à \(t)") }
+        return parts.joined(separator: " · ")
     }
 
     /// Bottom of the sidebar: add folder and running tasks.

@@ -29,5 +29,14 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 </dict>
 </plist>
 PLIST
-codesign --force --sign - "$APP" >/dev/null 2>&1 || true
+# Signature. With an Apple "Developer ID Application" certificate in the Keychain (or named in
+# ALBUMINE_SIGN_ID), the app is signed for distribution (hardened runtime, timestamp): macOS then
+# opens it without warning once it is notarized (see release.sh). Otherwise: local ad-hoc signature.
+SIGN_ID="${ALBUMINE_SIGN_ID:-$(security find-identity -v -p codesigning 2>/dev/null | sed -n 's/.*"\(Developer ID Application: [^"]*\)".*/\1/p' | head -1)}"
+if [[ -n "$SIGN_ID" ]]; then
+  codesign --force --options runtime --timestamp --sign "$SIGN_ID" "$APP"
+  echo "Signed with: $SIGN_ID"
+else
+  codesign --force --sign - "$APP" >/dev/null 2>&1 || true
+fi
 echo "✅ $APP ready"

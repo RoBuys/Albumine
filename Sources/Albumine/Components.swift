@@ -101,6 +101,34 @@ struct FlowLayout: Layout {
     }
 }
 
+/// Message shown at the bottom of the window after an operation; it does not block anything
+/// and disappears by itself. `undo`: adds an "Annuler" button (move to the Trash).
+struct NoticeToast: View {
+    let text: String
+    var undo: (() -> Void)?
+    let onClose: () -> Void
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Text(text).fixedSize(horizontal: false, vertical: true)
+            if let undo {
+                Button("Annuler", action: undo)
+                    .help("Remet les fichiers à leur place, avec leurs notes, personnes et albums")
+            }
+            Button(action: onClose) { Image(systemName: "xmark") }
+                .buttonStyle(.plain)
+                .foregroundStyle(.secondary)
+                .help("Fermer")
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 10)
+        .frame(maxWidth: 620)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
+        .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(.separator))
+        .shadow(color: .black.opacity(0.2), radius: 10, y: 3)
+    }
+}
+
 /// Alias to the `State` property wrapper: with Command Line Tools only,
 /// the SDK's `@State` macro has no plugin; the alias bypasses the macro.
 typealias Etat = SwiftUI.State

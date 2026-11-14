@@ -102,6 +102,11 @@ final class FaceReferences: @unchecked Sendable {
 
     func remove(_ name: String) { lock.withLock { prints[name] = nil } }
 
+    /// Raw vectors of the examples, per person (to compare many faces quickly).
+    func vectors() -> [String: [[Float]]] {
+        lock.withLock { prints }.mapValues { $0.compactMap(FaceClusterer.vector) }
+    }
+
     /// Merges one person's examples into another's (rename / merge).
     func rename(_ old: String, to new: String) {
         lock.withLock {
