@@ -1,5 +1,7 @@
 # Albumine
 
+[![Downloads](https://img.shields.io/github/downloads/RoBuys/Albumine/total)](https://github.com/RoBuys/Albumine/releases)
+
 A photo manager for macOS (SwiftUI) in the spirit of the classic "local" organizers such as Picasa:
 your photos stay in your own folders — nothing is moved, nothing is modified, and all analysis
 runs on your Mac.
