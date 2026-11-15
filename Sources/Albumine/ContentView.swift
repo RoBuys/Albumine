@@ -7,7 +7,14 @@ struct ContentView: View {
     /// ALBUMINE_START_VIEW=map: opens the map directly (tests).
     @Etat private var sidebar: SidebarItem? = ProcessInfo.processInfo.environment["ALBUMINE_START_VIEW"] == "map" ? .map : .all
     @Etat private var search = ""
-    @Etat private var selection: Set<String> = []
+    /// Selected photos. Kept in an observable object that each thumbnail watches itself: passing
+    /// "selected" down as a value left some thumbnails drawn with an outdated state (selection
+    /// frame or stars not updated, notably in Memories and in folders).
+    @Etat private var gridSelection = GridSelection()
+    private var selection: Set<String> {
+        get { gridSelection.ids }
+        nonmutating set { gridSelection.ids = newValue }
+    }
     @Etat private var anchor: String?
     @Etat private var thumbSize: Double = 160
     @Etat private var sort: PhotoSort = .newest
@@ -268,6 +275,62 @@ struct ContentView: View {
             viewerList = nil
             sidebar = .map
             await snap("7-map", wait: 4)
+        case "starclick":
+            guard let w = NSApp.windows.first(where: { $0.isVisible }) else { break }
+            w.setFrame(NSRect(x: 60, y: 60, width: 1500, height: 940), display: true)
+            w.makeKeyAndOrderFront(nil)
+            NSApp.activate(ignoringOtherApps: true)
+            let all = library.byDateNewest
+            library.setRating(3, for: Array(all.prefix(3)))
+            /// Real mouse click at a point of the window (top-left origin, in points).
+            func click(_ x: CGFloat, _ yTop: CGFloat) async {
+                let p = NSPoint(x: x, y: w.frame.height - yTop)
+                for type in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {
+                    if let e = NSEvent.mouseEvent(with: type, location: p, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
+                                                  windowNumber: w.windowNumber, context: nil, eventNumber: 0, clickCount: 1, pressure: 1) {
+                        NSApp.postEvent(e, atStart: false)
+                    }
+                    try? await Task.sleep(for: .milliseconds(80))
+                }
+            }
+            for (name, item) in [("all", SidebarItem.all), ("starred", .starred)] {
+                sidebar = item
+                try? await Task.sleep(for: .seconds(1.5))
+                guard let first = visible.first(where: { library.rating(of: $0) == 3 }) else { continue }
+                selection = [first.id]
+                await snap("click-\(name)-before", wait: 2)
+                // Press the inspector's 5th star through accessibility (same action as a click).
+                func find(_ el: Any, depth: Int = 0) -> (NSObject & NSAccessibilityProtocol)? {
+                    guard depth < 60, let e = el as? NSObject & NSAccessibilityProtocol else { return nil }
+                    if e.accessibilityRole() == .button, (e.accessibilityHelp() ?? "") == "5 étoiles" { return e }
+                    for c in (e.accessibilityChildren() ?? []) { if let f = find(c, depth: depth + 1) { return f } }
+                    return nil
+                }
+                if let star = find(w) { Debug.log("étoile trouvée"); _ = star.accessibilityPerformPress() }
+                else { Debug.log("étoile introuvable") }
+                try? await Task.sleep(for: .seconds(1.5))
+                Debug.log("clic étoiles (\(name)) : \(first.name) note = \(library.rating(of: first))")
+                await snap("click-\(name)-after", wait: 1)
+                library.setRating(3, for: [first])
+                try? await Task.sleep(for: .seconds(1))
+            }
+        case "starrate":
+            let all = library.byDateNewest
+            library.setRating(3, for: Array(all.prefix(3)))
+            if ProcessInfo.processInfo.environment["ALBUMINE_VIA"] == "memories" {
+                sidebar = .memories
+                try? await Task.sleep(for: .seconds(2))
+                sidebar = .folder(all[0].folderPath)
+                try? await Task.sleep(for: .seconds(2))
+            }
+            sidebar = .starred
+            try? await Task.sleep(for: .seconds(1.5))
+            let first = visible[0]
+            selection = [first.id]
+            await snap("star-before", wait: 1.5)
+            library.setRating(5, for: [first])
+            await snap("star-after", wait: 2)
+            Debug.log("note de \(first.name) : \(library.rating(of: first)), affichés : \(visible.map { "\($0.name)=\(library.rating(of: $0))" })")
         case "video":
             sidebar = .videos
             try? await Task.sleep(for: .seconds(1.5))
@@ -406,7 +469,7 @@ struct ContentView: View {
             }
             .dropDestination(for: URL.self) { urls, _ in library.addFolders(urls); return true }
         } else if item == .map {
-            PhotoMapView(photos: visible, selection: $selection, onOpen: open)
+            PhotoMapView(photos: visible, selection: Binding(get: { gridSelection.ids }, set: { gridSelection.ids = $0 }), onOpen: open)
         } else if item == .duplicates, library.duplicateGroups == nil || library.isFindingDuplicates {
             duplicatesIntro
         } else if item == .similar, library.similarGroups == nil || library.isFindingSimilar {
@@ -573,18 +636,10 @@ struct ContentView: View {
     }
 
     private func cell(_ photo: Photo, index: Int, in photos: [Photo]) -> some View {
-        #if DEBUG
-        if ProcessInfo.processInfo.environment["ALBUMINE_TRACE_CELLS"] != nil {
-            Debug.log("cellule \(photo.name) sélectionnée=\(selection.contains(photo.id)) vue=\(String(describing: sidebar))")
-        }
-        #endif
-        return         PhotoCell(
+        PhotoCell(
             photo: photo,
             size: thumbSize,
-            isSelected: selection.contains(photo.id),
-            rating: library.rating(of: photo),
-            rotation: library.rotation(of: photo),
-            edits: library.edits(of: photo),
+            selection: gridSelection,
             badge: badge(for: photo)
         )
         .id(photo.id)
@@ -1539,16 +1594,30 @@ struct Banner<Content: View, Actions: View>: View {
     }
 }
 
+/// Selected photo identifiers, observed by each thumbnail.
+@Observable
+final class GridSelection {
+    var ids: Set<String> = []
+}
+
 struct PhotoCell: View {
+    @Environment(PhotoLibrary.self) private var library
     let photo: Photo
     let size: Double
-    let isSelected: Bool
-    let rating: Int
-    let rotation: Int
-    var edits: PhotoEdits? = nil
+    let selection: GridSelection
     var badge: String? = nil
 
     var body: some View {
+        // Read here (not passed in): the cell redraws by itself when they change.
+        let isSelected = selection.ids.contains(photo.id)
+        let rating = library.rating(of: photo)
+        let rotation = library.rotation(of: photo)
+        let edits = library.edits(of: photo)
+        return content(isSelected: isSelected, rating: rating, rotation: rotation, edits: edits)
+    }
+
+    @ViewBuilder
+    private func content(isSelected: Bool, rating: Int, rotation: Int, edits: PhotoEdits?) -> some View {
         VStack(spacing: 4) {
             ThumbnailView(url: photo.url, rotation: rotation, edits: edits)
                 .frame(width: size, height: size)
