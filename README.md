@@ -8,6 +8,12 @@ runs on your Mac.
 
 Tested on a 190,000-item library (photos and videos) on an external drive.
 
+![Albumine: your folders as they are on disk, with ratings, albums, smart albums and recognized content](docs/screenshots/1-library.png)
+
+| Duplicates by folder | Comparing similar shots | Quick sorting in the viewer |
+|---|---|---|
+| ![Duplicates grouped by pairs of folders](docs/screenshots/2-duplicates-by-folder.png) | ![Similar photos side by side with a shared zoom](docs/screenshots/3-compare-series.png) | ![Viewer with keep / discard buttons](docs/screenshots/4-viewer-quick-sort.png) |
+
 > **Language:** the interface is available in **French and English**. It follows your Mac's language;
 > to choose, open Settings (⌘,) › Options › "Langue · Language" and relaunch. Menu and button names
 > below are quoted in French as they appear in the French interface, with an English translation.

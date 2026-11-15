@@ -3,3 +3,6 @@ Albumine.app/
 .DS_Store
 .swiftpm/
 *.xcodeproj/xcuserdata/
+
+# Marketing drafts (not part of the project)
+docs/reddit-post.md
