@@ -25,7 +25,8 @@ enum PlaceStore {
     static let cellsPerDegree = 50.0
 
     static func cell(_ lat: Double, _ lon: Double) -> String {
-        "\(Int((lat * cellsPerDegree).rounded()))|\(Int((lon * cellsPerDegree).rounded()))"
+        guard lat.isFinite, lon.isFinite else { return "" }
+        return "\(Int((lat * cellsPerDegree).rounded()))|\(Int((lon * cellsPerDegree).rounded()))"
     }
 
     static func center(of cell: String) -> CLLocation? {

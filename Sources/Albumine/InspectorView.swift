@@ -306,13 +306,16 @@ struct InspectorView: View {
     private var shootingSettings: String? {
         guard let info else { return nil }
         var parts: [String] = []
-        if let f = info.aperture { parts.append("ƒ/\(f.formatted(.number.precision(.fractionLength(0...1))))") }
-        if let t = info.exposure {
-            parts.append(t >= 1 ? "\(t.formatted(.number.precision(.fractionLength(0...1)))) s"
-                                : "1/\(Int((1 / t).rounded())) s")
+        // EXIF values can be 0, negative or invalid (some cameras, edited files): they are skipped
+        // instead of crashing (1/0 exposure time made the app quit when such a photo was selected).
+        func valid(_ v: Double?) -> Double? { v.flatMap { $0.isFinite && $0 > 0 ? $0 : nil } }
+        if let f = valid(info.aperture) { parts.append("ƒ/\(f.formatted(.number.precision(.fractionLength(0...1))))") }
+        if let t = valid(info.exposure) {
+            parts.append(t >= 1 || !(1 / t).isFinite ? "\(t.formatted(.number.precision(.fractionLength(0...4)))) s"
+                                                     : "1/\(Int(min((1 / t).rounded(), 1_000_000))) s")
         }
-        if let iso = info.iso { parts.append("ISO \(iso)") }
-        if let fl = info.focalLength { parts.append("\(Int(fl.rounded())) mm") }
+        if let iso = info.iso, iso > 0 { parts.append("ISO \(iso)") }
+        if let fl = valid(info.focalLength) { parts.append("\(Int(min(fl.rounded(), 100_000))) mm") }
         return parts.isEmpty ? nil : parts.joined(separator: " · ")
     }
 

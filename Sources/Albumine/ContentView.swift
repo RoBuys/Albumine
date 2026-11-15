@@ -268,6 +268,44 @@ struct ContentView: View {
             viewerList = nil
             sidebar = .map
             await snap("7-map", wait: 4)
+        case "inspectzero":
+            sidebar = .all
+            try? await Task.sleep(for: .seconds(1.5))
+            if let p = visible.first(where: { $0.name == "zero-exposure.jpg" }) { selection = [p.id] }
+            await snap("inspect-zero", wait: 3)
+            Debug.log("inspecteur affiché sans plantage")
+        case "selviews":
+            let all = library.byDateNewest
+            library.setRating(3, for: Array(all.prefix(3)))
+            for (name, item) in [("memories", SidebarItem.memories), ("all", .all), ("folder", .folder(all[0].folderPath)), ("starred", .starred)] {
+                sidebar = item
+                try? await Task.sleep(for: .seconds(1.5))
+                selection = Set(visible.prefix(2).map(\.id))
+                await snap("sel-\(name)", wait: 1.5)
+                if name == "memories" {
+                    await snap("sel-\(name)-later", wait: 4)
+                    thumbSize += 1
+                    await snap("sel-\(name)-nudged", wait: 1.5)
+                }
+                Debug.log("vue \(name) : \(visible.count) affichés, \(selection.count) sélectionnés")
+            }
+        case "memories":
+            sidebar = .memories
+            try? await Task.sleep(for: .seconds(2))
+            Debug.log("souvenirs : \(visible.count) affichés, \(library.memoryIDs.count) au total")
+            await snap("mem-before", wait: 1)
+            let victims = Array(visible.prefix(2))
+            selection = Set(victims.map(\.id))
+            await snap("mem-selected", wait: 1.5)
+            photosToTrash = victims
+            await snap("mem-confirm", wait: 1.5)
+            library.trash(victims)
+            photosToTrash = nil
+            selection.removeAll()
+            while library.isTrashing { try? await Task.sleep(for: .milliseconds(100)) }
+            try? await Task.sleep(for: .seconds(1.5))
+            Debug.log("souvenirs après : \(visible.count) affichés, message : \(library.notice ?? "-"), existe encore : \(victims.map { FileManager.default.fileExists(atPath: $0.id) })")
+            await snap("mem-after", wait: 1)
         case "trashselect":
             sidebar = .all
             try? await Task.sleep(for: .seconds(2))
@@ -488,6 +526,13 @@ struct ContentView: View {
             .onKeyPress(keys: [.leftArrow, .rightArrow, .return, .space]) { press in
                 handleKey(press.key, in: photos, proxy: proxy)
             }
+            // ⌘⌫ or ⌫ (as in the Finder and Photos): move the selection to the Trash, after confirmation.
+            .onKeyPress(keys: [.delete, .deleteForward]) { _ in
+                let targets = selectedPhotos.filter { !$0.offline }
+                guard !targets.isEmpty, !library.isTrashing else { return .ignored }
+                photosToTrash = targets
+                return .handled
+            }
             .onKeyPress(characters: CharacterSet(charactersIn: "012345")) { press in
                 guard !selectedPhotos.isEmpty, let n = Int(press.characters) else { return .ignored }
                 library.setRating(n, for: selectedPhotos)
@@ -522,7 +567,12 @@ struct ContentView: View {
     }
 
     private func cell(_ photo: Photo, index: Int, in photos: [Photo]) -> some View {
-        PhotoCell(
+        #if DEBUG
+        if ProcessInfo.processInfo.environment["ALBUMINE_TRACE_CELLS"] != nil {
+            Debug.log("cellule \(photo.name) sélectionnée=\(selection.contains(photo.id)) vue=\(String(describing: sidebar))")
+        }
+        #endif
+        return         PhotoCell(
             photo: photo,
             size: thumbSize,
             isSelected: selection.contains(photo.id),
@@ -629,6 +679,7 @@ struct ContentView: View {
         }
         Divider()
         Button("Mettre à la corbeille…", role: .destructive) { photosToTrash = targets }
+            .keyboardShortcut(.delete, modifiers: .command)
     }
 
     /// Duplicates and similar photos: keep one photo of the series under the mouse (or of every
