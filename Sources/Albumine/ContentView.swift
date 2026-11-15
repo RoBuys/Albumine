@@ -224,6 +224,18 @@ struct ContentView: View {
                 library.keepFolder(pair.a, in: pair)
                 await snap("dup-toast-undo", wait: 2)
             }
+        case "trashselect":
+            sidebar = .all
+            try? await Task.sleep(for: .seconds(2))
+            selection = Set(visible.prefix(2).map(\.id))
+            await snap("sel-before", wait: 1.5)
+            library.trash(Array(visible.prefix(2)))
+            selection.removeAll()
+            while library.isTrashing { try? await Task.sleep(for: .milliseconds(100)) }
+            try? await Task.sleep(for: .seconds(2))
+            selection = Set([visible[0].id, visible[2].id])
+            Debug.log("sélection : \(selection.map { ($0 as NSString).lastPathComponent })")
+            await snap("sel-after", wait: 1.5)
         case "compare":
             compareIsSimilar = true
             compareSeries = [Array(photos.prefix(3)), Array(photos.dropFirst(3).prefix(5))]
@@ -401,8 +413,10 @@ struct ContentView: View {
                 ) {
                     ForEach(groups) { group in
                         Section {
-                            ForEach(group.range, id: \.self) { i in
-                                cell(photos[i], index: i, in: photos)
+                            // Cells are identified by photo, not by position: after photos are
+                            // removed (Trash), position-keyed cells kept a stale selection state.
+                            ForEach(group.range.map { (index: $0, photo: photos[$0]) }, id: \.photo.id) { item in
+                                cell(item.photo, index: item.index, in: photos)
                             }
                         } header: {
                             GroupHeader(group: group) {
