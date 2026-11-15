@@ -81,7 +81,8 @@ struct CompareView: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text(isSeries ? "Série \(position + 1) sur \(remaining.count) · \(current.count) photos" : "Comparaison de \(current.count) photos")
                     .font(.headline)
-                Text("1–9 : garder ou jeter une photo · Entrée : valider\(isSeries ? " et passer à la série suivante · ← → : changer de série" : "") · Z : zoom · A : tout garder")
+                Text(isSeries ? "1–9 : garder ou jeter une photo · Entrée : valider et passer à la série suivante · ← → : changer de série · Z : zoom · A : tout garder"
+                            : "1–9 : garder ou jeter une photo · Entrée : valider · Z : zoom · A : tout garder")
                     .font(.caption).foregroundStyle(.white.opacity(0.6))
             }
             Spacer()
@@ -105,10 +106,11 @@ struct CompareView: View {
                     .disabled(position >= remaining.count - 1)
             }
             Spacer()
-            Text(removed == 0 ? "Tout est gardé" : "\(keep.count) gardée\(keep.count > 1 ? "s" : "") · \(removed) à la corbeille")
+            Text(removed == 0 ? L("Tout est gardé")
+                 : L(keep.count, one: "1 gardée", other: "\(keep.count) gardées") + " · " + L("\(removed) à la corbeille"))
                 .foregroundStyle(.white.opacity(0.7))
             Button(removed == 0 ? (isSeries ? "Tout garder, série suivante" : "Fermer")
-                                : "Mettre \(removed) photo\(removed > 1 ? "s" : "") à la corbeille") { apply() }
+                                : L(removed, one: "Mettre 1 photo à la corbeille", other: "Mettre \(removed) photos à la corbeille")) { apply() }
                 .buttonStyle(.borderedProminent)
                 .disabled(keep.isEmpty)
         }

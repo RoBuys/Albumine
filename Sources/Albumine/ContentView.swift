@@ -203,7 +203,9 @@ struct ContentView: View {
         guard let scenario = env["ALBUMINE_SCENARIO"], let dir = env["ALBUMINE_SNAPSHOT_DIR"] else { return }
         func snap(_ name: String, wait: Double = 2.5) async {
             try? await Task.sleep(for: .seconds(wait))
-            guard let view = NSApp.windows.first(where: { $0.isVisible && $0.contentView != nil })?.contentView,
+            // The frame view includes the title bar and toolbar.
+            guard let window = NSApp.windows.first(where: { $0.isVisible && $0.contentView != nil }),
+                  let view = window.contentView?.superview ?? window.contentView,
                   let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { return }
             view.cacheDisplay(in: view.bounds, to: rep)
             try? rep.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: dir).appendingPathComponent(name + ".png"))
@@ -224,6 +226,48 @@ struct ContentView: View {
                 library.keepFolder(pair.a, in: pair)
                 await snap("dup-toast-undo", wait: 2)
             }
+        case "reddit":
+            if let w = NSApp.windows.first(where: { $0.isVisible }) {
+                w.setFrame(NSRect(x: 60, y: 60, width: 1500, height: 940), display: true)
+            }
+            thumbSize = 150
+            grouping = .folder
+            while library.isAnalyzingContent { try? await Task.sleep(for: .milliseconds(300)) }
+            let all = library.byDateNewest
+            library.setRating(5, for: Array(all.filter { $0.folderName == "Mountains 2021" }.prefix(3)))
+            library.setRating(4, for: Array(all.filter { $0.folderName == "Seaside 2020" }.prefix(4)))
+            library.createAlbum("Best of", with: Array(all.filter { $0.folderName != "Old phone backup" }.prefix(9)))
+            library.saveSmartAlbum(SmartAlbum(name: "Snow", query: "neige", minRating: 0))
+            library.notice = nil
+            sidebar = .all
+            try? await Task.sleep(for: .seconds(2))
+            if let p = visible.first(where: { $0.folderName == "Mountains 2021" }) { selection = [p.id] }
+            await snap("1-grid", wait: 4)
+            search = "neige"
+            selection = []
+            await snap("2-search", wait: 3)
+            search = ""
+            sidebar = .duplicates
+            library.findDuplicates()
+            while library.duplicateGroups == nil || library.isFindingDuplicates { try? await Task.sleep(for: .milliseconds(200)) }
+            library.notice = nil
+            duplicatesByFolder = true
+            await snap("3-duplicates-by-folder", wait: 2)
+            duplicatesByFolder = false
+            sidebar = .similar
+            library.findSimilar()
+            while library.similarGroups == nil || library.isFindingSimilar { try? await Task.sleep(for: .milliseconds(200)) }
+            await snap("4-similar", wait: 3)
+            if !(library.similarGroups ?? []).isEmpty { compareSimilar(from: 0) }
+            await snap("5-compare", wait: 5)
+            compareSeries = nil
+            sidebar = .all
+            try? await Task.sleep(for: .seconds(1.5))
+            if let i = visible.firstIndex(where: { $0.folderName == "Seaside 2020" }) { open(visible, at: i) }
+            await snap("6-viewer", wait: 5)
+            viewerList = nil
+            sidebar = .map
+            await snap("7-map", wait: 4)
         case "trashselect":
             sidebar = .all
             try? await Task.sleep(for: .seconds(2))
@@ -497,14 +541,14 @@ struct ContentView: View {
     private func badge(for photo: Photo) -> String? {
         switch sidebar ?? .all {
         case .duplicates:
-            return library.duplicateKeepers.contains(photo.id) ? "À garder" : nil
+            return library.duplicateKeepers.contains(photo.id) ? L("À garder") : nil
         case .similar:
-            return library.similarBest.contains(photo.id) ? "Meilleure" : nil
+            return library.similarBest.contains(photo.id) ? L("Meilleure") : nil
         case .unnamedFaces:
             let suggestions = library.faces(of: photo).filter { $0.name == nil }.compactMap(\.suggestion)
             return suggestions.isEmpty ? nil : Set(suggestions).sorted().joined(separator: ", ") + " ?"
         default:
-            return library.isDiscarded(photo) ? "À jeter" : nil
+            return library.isDiscarded(photo) ? L("À jeter") : nil
         }
     }
 
@@ -578,7 +622,7 @@ struct ContentView: View {
         Button("Pivoter à gauche") { library.rotate(targets, by: -1) }
         Menu("Note") {
             ForEach(0...5, id: \.self) { n in
-                Button(n == 0 ? "Aucune" : String(repeating: "★", count: n)) {
+                Button(n == 0 ? L("Aucune") : String(repeating: "★", count: n)) {
                     library.setRating(n, for: targets)
                 }
             }
@@ -737,8 +781,8 @@ struct ContentView: View {
 
     private var analysisProgressText: String {
         library.isAnalyzingContent
-            ? "\(library.contentDone.formatted()) / \(library.contentTotal.formatted()) photos analysées"
-            : "terminée"
+            ? L("\(library.contentDone.formatted()) / \(library.contentTotal.formatted()) photos analysées")
+            : L("terminée")
     }
 
     private var similarBar: some View {
@@ -799,7 +843,7 @@ struct ContentView: View {
             Button("Ce n'est pas raté") { library.markQualityOK(selectedPhotos); selection.removeAll() }
                 .disabled(selection.isEmpty)
             Button(selection.isEmpty ? "Mettre la sélection à la corbeille…"
-                   : "Mettre \(selection.count.formatted()) photo\(selection.count > 1 ? "s" : "") à la corbeille…") { photosToTrash = selectedPhotos }
+                   : L(selection.count, one: "Mettre 1 photo à la corbeille…", other: "Mettre \(selection.count.formatted()) photos à la corbeille…")) { photosToTrash = selectedPhotos }
                 .buttonStyle(.borderedProminent)
                 .disabled(selection.isEmpty)
         }
@@ -868,8 +912,8 @@ struct ContentView: View {
         if !library.memoryIDs.isEmpty, search.isEmpty {
             let now = Calendar.current.component(.year, from: Date())
             Banner(systemImage: "clock.arrow.circlepath") {
-                Text("Ce jour-là : \(library.memoryIDs.count.formatted()) souvenir\(library.memoryIDs.count > 1 ? "s" : "")").font(.headline)
-                Text(library.memoryYears.prefix(6).map { "il y a \(now - $0) ans (\(String($0)))" }.joined(separator: " · "))
+                Text(L(library.memoryIDs.count, one: "Ce jour-là : 1 souvenir", other: "Ce jour-là : \(library.memoryIDs.count.formatted()) souvenirs")).font(.headline)
+                Text(library.memoryYears.prefix(6).map { L(now - $0, one: "il y a 1 an (\(String($0)))", other: "il y a \(now - $0) ans (\(String($0)))") }.joined(separator: " · "))
                     .font(.caption).foregroundStyle(.secondary).lineLimit(1)
             } actions: {
                 Button("Diaporama") {
@@ -892,11 +936,11 @@ struct ContentView: View {
 
     private var periodLabel: String {
         switch (yearFrom, yearTo) {
-        case (nil, nil): return "Période : toutes"
-        case let (f?, t?) where f == t: return "Période : \(String(f))"
-        case let (f?, t?): return "Période : \(String(f))–\(String(t))"
-        case let (f?, nil): return "Période : depuis \(String(f))"
-        case let (nil, t?): return "Période : jusqu'à \(String(t))"
+        case (nil, nil): return L("Période : toutes")
+        case let (f?, t?) where f == t: return L("Période : \(String(f))")
+        case let (f?, t?): return L("Période : \(String(f))–\(String(t))")
+        case let (f?, nil): return L("Période : depuis \(String(f))")
+        case let (nil, t?): return L("Période : jusqu'à \(String(t))")
         }
     }
 
@@ -951,7 +995,7 @@ struct ContentView: View {
         add(library.allPlaces.map(\.name), "mappin.and.ellipse", limit: 3)
         add(library.allAlbums.map(\.name), "rectangle.stack", limit: 2)
         add(library.allTags.map(\.name), "tag", limit: 2)
-        add(Array(Set(ContentLabels.names.values)).sorted(), "sparkles", limit: 4)
+        add(ContentLabels.suggestionNames, "sparkles", limit: 4)
         add(availableYears.map(String.init), "calendar", limit: 3)
         var seen = Set<String>()
         return out.filter { seen.insert($0.0).inserted }.prefix(10).map { (text: $0.0, icon: $0.1) }
@@ -1049,7 +1093,7 @@ struct ContentView: View {
         let item = sidebar ?? .all
         if item == .duplicates { return duplicateList() }
         if item == .similar { return idGroups(library.similarGroups ?? [], title: { items in
-            "Série de \(items.count) photos" }) }
+            L("Série de \(items.count) photos") }) }
 
         // List already sorted by date (sorted once by the library).
         var list = sort == .oldest ? Array(library.byDateNewest.reversed()) : library.byDateNewest
@@ -1093,7 +1137,7 @@ struct ContentView: View {
         if item == .map { return (list, []) }
         if item == .damaged {
             return group(list) { p in
-                let r = library.damageReason(of: p) ?? "Problème"
+                let r = library.damageReason(of: p) ?? L("Problème")
                 return (r, r, nil)
             }
         }
@@ -1108,13 +1152,13 @@ struct ContentView: View {
         if item == .rejects {
             return group(list) { p in
                 let r = library.rejectReason(of: p) ?? .poor
-                return (r.rawValue, r.rawValue, nil)
+                return (r.rawValue, r.title, nil)
             }
         }
         if item == .unnamedFaces {
             return group(list) { p in
                 let s = library.faces(of: p).first { $0.name == nil }?.suggestion
-                return (s ?? "~", s.map { "Proposé : \($0)" } ?? "Sans proposition", nil)
+                return (s ?? "~", s.map { L("Proposé : \($0)") } ?? L("Sans proposition"), nil)
             }
         }
 
@@ -1154,7 +1198,7 @@ struct ContentView: View {
             guard end > start else { return }
             let items = Array(list[start..<end])
             let places = items.compactMap { library.placeName(of: $0) }
-            let title = mostCommon(places) ?? mostCommon(items.map(\.folderName)) ?? "Événement"
+            let title = mostCommon(places) ?? mostCommon(items.map(\.folderName)) ?? L("Événement")
             groups.append(PhotoGroup(id: "ev\(start)-\(items[0].id)", title: title,
                                      subtitle: eventSubtitle(items), range: start..<end,
                                      folderPath: places.isEmpty ? items[0].folderPath : nil))
@@ -1180,7 +1224,7 @@ struct ContentView: View {
     }
 
     private func eventSubtitle(_ items: [Photo]) -> String {
-        let count = "\(items.count.formatted()) élément\(items.count > 1 ? "s" : "")"
+        let count = L(items.count, one: "1 élément", other: "\(items.count.formatted()) éléments")
         guard let first = items.map(\.date).min(), let last = items.map(\.date).max() else { return count }
         let sameDay = Calendar.current.isDate(first, inSameDayAs: last)
         let a = first.formatted(.dateTime.day().month(.abbreviated).year())
@@ -1231,7 +1275,7 @@ struct ContentView: View {
     }
 
     private func groupSubtitle(_ items: [Photo]) -> String {
-        let count = "\(items.count.formatted()) élément\(items.count > 1 ? "s" : "")"
+        let count = L(items.count, one: "1 élément", other: "\(items.count.formatted()) éléments")
         guard let first = items.map(\.date).min(), let last = items.map(\.date).max() else { return count }
         let a = first.formatted(.dateTime.month(.abbreviated).year())
         let b = last.formatted(.dateTime.month(.abbreviated).year())
@@ -1249,7 +1293,7 @@ struct ContentView: View {
             list += items
             groups.append(PhotoGroup(
                 id: "dup\(n)", title: items[0].name,
-                subtitle: "\(items.count) copies identiques · \(ByteCountFormatter.string(fromByteCount: items[0].fileSize, countStyle: .file)) chacune",
+                subtitle: L("\(items.count) copies identiques · \(ByteCountFormatter.string(fromByteCount: items[0].fileSize, countStyle: .file)) chacune"),
                 range: start..<list.count))
         }
         return (list, groups)
@@ -1257,29 +1301,30 @@ struct ContentView: View {
 
     private var title: String {
         switch sidebar ?? .all {
-        case .all: return "Toutes les photos"
-        case .starred: return "Étoilées"
+        case .all: return L("Toutes les photos")
+        case .starred: return L("Étoilées")
         case .folder(let path): return (path as NSString).lastPathComponent
         case .tag(let tag): return tag
         case .person(let name): return name
         case .album(let name): return name
-        case .unnamedFaces: return "Visages à nommer"
-        case .videos: return "Vidéos"
-        case .duplicates: return "Doublons"
-        case .map: return "Carte"
-        case .similar: return "Photos similaires"
-        case .rejects: return "Photos ratées"
+        case .unnamedFaces: return L("Visages à nommer")
+        case .videos: return L("Vidéos")
+        case .duplicates: return L("Doublons")
+        case .map: return L("Carte")
+        case .similar: return L("Photos similaires")
+        case .rejects: return L("Photos ratées")
         case .place(let name): return name
-        case .memories: return "Souvenirs du jour"
-        case .damaged: return "Fichiers abîmés"
+        case .memories: return L("Souvenirs du jour")
+        case .damaged: return L("Fichiers abîmés")
         case .smart(let name): return name
-        case .discards: return "À jeter"
+        case .discards: return L("À jeter")
         }
     }
 
     private var subtitle: String {
-        let count = "\(visible.count.formatted()) élément\(visible.count > 1 ? "s" : "")"
-        return selection.isEmpty ? count : "\(count) · \(selection.count.formatted()) sélectionné\(selection.count > 1 ? "s" : "")"
+        let count = L(visible.count, one: "1 élément", other: "\(visible.count.formatted()) éléments")
+        return selection.isEmpty ? count
+            : count + " · " + L(selection.count, one: "1 sélectionné", other: "\(selection.count.formatted()) sélectionnés")
     }
 
     // MARK: Toolbar
@@ -1299,10 +1344,10 @@ struct ContentView: View {
 
             Menu {
                 Picker("Regrouper", selection: $grouping) {
-                    ForEach(PhotoGrouping.allCases) { Text($0.rawValue).tag($0) }
+                    ForEach(PhotoGrouping.allCases) { Text($0.title).tag($0) }
                 }
                 Picker("Trier par", selection: $sort) {
-                    ForEach(PhotoSort.allCases) { Text($0.rawValue).tag($0) }
+                    ForEach(PhotoSort.allCases) { Text($0.title).tag($0) }
                 }
                 Menu(periodLabel) {
                     Button("Toutes les années") { yearFrom = nil; yearTo = nil }
@@ -1321,7 +1366,7 @@ struct ContentView: View {
                 Picker("Note minimale", selection: $minRating) {
                     Text("Toutes les notes").tag(0)
                     ForEach(1...5, id: \.self) { n in
-                        Text(String(repeating: "★", count: n) + " et plus").tag(n)
+                        Text(String(repeating: "★", count: n) + L(" et plus")).tag(n)
                     }
                 }
                 Divider()
@@ -1512,7 +1557,7 @@ struct CellBadge: View {
             .foregroundStyle(.white)
             .padding(.horizontal, 5)
             .padding(.vertical, 2)
-            .background((text == "À jeter" ? Color.red : Color.green).opacity(0.85), in: Capsule())
+            .background((text == L("À jeter") ? Color.red : Color.green).opacity(0.85), in: Capsule())
     }
 }
 

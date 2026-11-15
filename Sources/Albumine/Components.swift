@@ -17,7 +17,7 @@ struct StarRatingPicker: View {
                         .foregroundStyle(i <= rating ? Color.yellow : Color.secondary)
                 }
                 .buttonStyle(.plain)
-                .help("\(i) étoile\(i > 1 ? "s" : "")")
+                .help(L(i, one: "1 étoile", other: "\(i) étoiles"))
             }
         }
     }
@@ -126,6 +126,47 @@ struct NoticeToast: View {
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
         .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(.separator))
         .shadow(color: .black.opacity(0.2), radius: 10, y: 3)
+    }
+}
+
+/// Text of the interface in the user's language. The French text is the key; translations live in
+/// `Resources/<language>.lproj/Localizable.strings` (copied into the app by build.sh).
+func L(_ value: String.LocalizationValue) -> String { String(localized: value) }
+
+/// Singular or plural form, each a complete sentence to translate (no "s" glued to words).
+func L(_ count: Int, one: String.LocalizationValue, other: String.LocalizationValue) -> String {
+    count == 1 ? String(localized: one) : String(localized: other)
+}
+
+/// Interface language. French is the original; English comes from the bundled translation.
+/// Settings › Options sets it for Albumine only (AppleLanguages), the rest of the Mac is unchanged.
+enum AppLanguage: String, CaseIterable, Identifiable {
+    case system, french = "fr", english = "en"
+    var id: String { rawValue }
+
+    /// Language actually used for the interface right now.
+    static var isFrench: Bool { (Bundle.main.preferredLocalizations.first ?? "fr").hasPrefix("fr") }
+
+    /// Choice saved for Albumine (takes effect at the next launch).
+    static var chosen: AppLanguage {
+        get {
+            guard let list = UserDefaults.standard.persistentDomain(forName: Bundle.main.bundleIdentifier ?? "")?["AppleLanguages"] as? [String],
+                  let first = list.first else { return .system }
+            return first.hasPrefix("fr") ? .french : first.hasPrefix("en") ? .english : .system
+        }
+        set {
+            if newValue == .system { UserDefaults.standard.removeObject(forKey: "AppleLanguages") }
+            else { UserDefaults.standard.set([newValue.rawValue], forKey: "AppleLanguages") }
+        }
+    }
+
+    /// Names are shown in their own language, whatever the current one.
+    var title: String {
+        switch self {
+        case .system: return L("Langue du Mac")
+        case .french: return "Français"
+        case .english: return "English"
+        }
     }
 }
 

@@ -13,6 +13,16 @@ struct PhotoEdits: Codable, Equatable, Hashable {
         case fade = "Doux"
         case chrome = "Chrome"
         var id: String { rawValue }
+        var title: String {
+            switch self {
+            case .none: return L("Aucun")
+            case .blackWhite: return L("Noir et blanc")
+            case .sepia: return L("Sépia")
+            case .vivid: return L("Éclatant")
+            case .fade: return L("Doux")
+            case .chrome: return L("Chrome")
+            }
+        }
     }
 
     var auto = false            // "J'ai de la chance" (I'm feeling lucky): automatic Core Image corrections

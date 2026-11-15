@@ -16,7 +16,7 @@ struct LocationPickerSheet: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("Lieu de \(photos.count) élément\(photos.count > 1 ? "s" : "")").font(.title3.weight(.semibold))
+            Text(L(photos.count, one: "Lieu de 1 élément", other: "Lieu de \(photos.count) éléments")).font(.title3.weight(.semibold))
             HStack {
                 TextField("Rechercher un lieu (ville, adresse, monument…)", text: $query)
                     .textFieldStyle(.roundedBorder)
@@ -27,7 +27,7 @@ struct LocationPickerSheet: View {
                 ScrollView(.horizontal) {
                     HStack {
                         ForEach(results, id: \.self) { item in
-                            Button(item.name ?? "Lieu") { choose(item.placemark.coordinate) }
+                            Button(item.name ?? L("Lieu")) { choose(item.placemark.coordinate) }
                                 .buttonStyle(.bordered)
                         }
                     }

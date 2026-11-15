@@ -83,7 +83,7 @@ struct PhotoMapView: View {
     private func strip(_ cluster: Cluster) -> some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack {
-                Text("\(cluster.photos.count) photo\(cluster.photos.count > 1 ? "s" : "") ici")
+                Text(L(cluster.photos.count, one: "1 photo ici", other: "\(cluster.photos.count) photos ici"))
                     .font(.headline)
                 Spacer()
                 Button("Ouvrir") { onOpen(cluster.photos, 0) }

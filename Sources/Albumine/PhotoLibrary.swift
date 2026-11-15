@@ -219,8 +219,8 @@ final class PhotoLibrary {
         panel.canChooseDirectories = true
         panel.canChooseFiles = false
         panel.allowsMultipleSelection = true
-        panel.prompt = "Ajouter"
-        panel.message = "Choisissez les dossiers qui contiennent vos photos"
+        panel.prompt = L("Ajouter")
+        panel.message = L("Choisissez les dossiers qui contiennent vos photos")
         if panel.runModal() == .OK { addFolders(panel.urls) }
     }
 
@@ -273,8 +273,8 @@ final class PhotoLibrary {
         panel.canChooseFiles = false
         panel.allowsMultipleSelection = true
         panel.directoryURL = root ?? roots.first
-        panel.prompt = "Exclure"
-        panel.message = "Choisissez les sous-dossiers à ne plus analyser (ils doivent être dans un dossier suivi)"
+        panel.prompt = L("Exclure")
+        panel.message = L("Choisissez les sous-dossiers à ne plus analyser (ils doivent être dans un dossier suivi)")
         if panel.runModal() == .OK { excludeFolders(panel.urls) }
     }
 
@@ -831,8 +831,8 @@ final class PhotoLibrary {
             }
             #endif
             notice = waste.count == 0
-                ? "Aucun doublon trouvé."
-                : "\(duplicateGroups?.count ?? 0) groupes de doublons : \(waste.count) copies en trop (\(ByteCountFormatter.string(fromByteCount: waste.bytes, countStyle: .file)))."
+                ? L("Aucun doublon trouvé.")
+                : L("\(duplicateGroups?.count ?? 0) groupes de doublons : \(waste.count) copies en trop (\(ByteCountFormatter.string(fromByteCount: waste.bytes, countStyle: .file))).")
         }
     }
 
@@ -902,8 +902,10 @@ final class PhotoLibrary {
         }
         let name = (other as NSString).lastPathComponent
         performTrash(steps, verifyIdentical: true) { [self] r in
-            notice = "\(r.removed.count) copie\(r.removed.count > 1 ? "s" : "") de « \(name) » mise\(r.removed.count > 1 ? "s" : "") à la corbeille (\(ByteCountFormatter.string(fromByteCount: r.bytes, countStyle: .file)) libérés)."
-                + (r.skipped > 0 ? " \(r.skipped) fichiers gardés : contenu différent ou corbeille indisponible." : "")
+            let size = ByteCountFormatter.string(fromByteCount: r.bytes, countStyle: .file)
+            notice = L(r.removed.count, one: "1 copie de « \(name) » mise à la corbeille (\(size) libérés).",
+                       other: "\(r.removed.count) copies de « \(name) » mises à la corbeille (\(size) libérés).")
+                + (r.skipped > 0 ? L(" \(r.skipped) fichiers gardés : contenu différent ou corbeille indisponible.") : "")
         }
     }
 
@@ -969,8 +971,10 @@ final class PhotoLibrary {
     private func trashDuplicateCopies(in groups: [[String]]) {
         let steps = groups.flatMap { g in g.dropFirst().map { TrashStep(remove: $0, into: g[0]) } }
         performTrash(steps, verifyIdentical: true) { [self] r in
-            notice = "\(r.removed.count) copie\(r.removed.count > 1 ? "s" : "") mise\(r.removed.count > 1 ? "s" : "") à la corbeille (\(ByteCountFormatter.string(fromByteCount: r.bytes, countStyle: .file)) libérés)."
-                + (r.skipped > 0 ? " \(r.skipped) fichiers gardés : contenu différent ou corbeille indisponible." : "")
+            let size = ByteCountFormatter.string(fromByteCount: r.bytes, countStyle: .file)
+            notice = L(r.removed.count, one: "1 copie mise à la corbeille (\(size) libérés).",
+                       other: "\(r.removed.count) copies mises à la corbeille (\(size) libérés).")
+                + (r.skipped > 0 ? L(" \(r.skipped) fichiers gardés : contenu différent ou corbeille indisponible.") : "")
         }
     }
 
@@ -1106,8 +1110,9 @@ final class PhotoLibrary {
             similarBest = Set((undo.similarGroups ?? []).compactMap(\.first))
             similarRevision += 1
             let missing = undo.files.count - restored
-            notice = "\(restored) fichier\(restored > 1 ? "s" : "") remis en place."
-                + (missing > 0 ? " \(missing) introuvable\(missing > 1 ? "s" : "") dans la Corbeille (déjà vidée ?)." : "")
+            notice = L(restored, one: "1 fichier remis en place.", other: "\(restored) fichiers remis en place.")
+                + (missing > 0 ? " " + L(missing, one: "1 introuvable dans la Corbeille (déjà vidée ?).",
+                                         other: "\(missing) introuvables dans la Corbeille (déjà vidée ?).") : "")
             metadataChanged()
             rescan()
         }
@@ -1117,8 +1122,8 @@ final class PhotoLibrary {
     func trash(_ photos: [Photo]) {
         let count = photos.count
         performTrash(photos.map { TrashStep(remove: $0.id, into: nil) }) { [self] r in
-            notice = "\(r.removed.count) élément\(r.removed.count > 1 ? "s" : "") mis à la corbeille."
-                + (r.removed.count < count ? " \(count - r.removed.count) n'ont pas pu l'être." : "")
+            notice = L(r.removed.count, one: "1 élément mis à la corbeille.", other: "\(r.removed.count) éléments mis à la corbeille.")
+                + (r.removed.count < count ? L(" \(count - r.removed.count) n'ont pas pu l'être.") : "")
         }
     }
 
@@ -1157,7 +1162,7 @@ final class PhotoLibrary {
             return !(m?.facesAnalyzed ?? false) && (m?.faces.isEmpty ?? true)
         }
         guard !targets.isEmpty else {
-            notice = "Les visages de ces photos ont déjà été analysés."
+            notice = L("Les visages de ces photos ont déjà été analysés.")
             return
         }
         let items = targets.map { (id: $0.id, url: $0.url, rotation: rotation(of: $0)) }
@@ -1217,7 +1222,9 @@ final class PhotoLibrary {
             faceTotal = 0
             faceDone = 0
             metadataChanged()
-            notice = "Analyse des visages\(Task.isCancelled ? " interrompue" : " terminée") : \(found) visages trouvés, \(suggested) noms proposés. Ils sont dans « Visages à nommer »."
+            notice = Task.isCancelled
+                ? L("Analyse des visages interrompue : \(found) visages trouvés, \(suggested) noms proposés. Ils sont dans « Visages à nommer ».")
+                : L("Analyse des visages terminée : \(found) visages trouvés, \(suggested) noms proposés. Ils sont dans « Visages à nommer ».")
         }
     }
 
@@ -1292,7 +1299,7 @@ final class PhotoLibrary {
             }
         }
         guard !items.isEmpty else {
-            notice = offlineCount > 0 ? "Aucun visage à regrouper sur les disques branchés." : "Aucun visage à regrouper."
+            notice = offlineCount > 0 ? L("Aucun visage à regrouper sur les disques branchés.") : L("Aucun visage à regrouper.")
             return
         }
         items.sort { $0.ref.id < $1.ref.id }
@@ -1525,7 +1532,7 @@ final class PhotoLibrary {
                     }
                 }
                 if !stuck.isEmpty {
-                    for id in stuck { damaged[id] = "Analyse impossible (le fichier bloque le décodage)" }
+                    for id in stuck { damaged[id] = L("Analyse impossible (le fichier bloque le décodage)") }
                     save()
                 }
                 contentDone = end
@@ -1626,8 +1633,8 @@ final class PhotoLibrary {
         performTrash(steps) { [self] r in
             let n = r.removed.count
             notice = selected.count == 1
-                ? "\(n) photo\(n > 1 ? "s" : "") de la série mise\(n > 1 ? "s" : "") à la corbeille."
-                : "\(n) photos mises à la corbeille ; une photo est conservée dans chacune des \(selected.count) séries."
+                ? L(n, one: "1 photo de la série mise à la corbeille.", other: "\(n) photos de la série mises à la corbeille.")
+                : L("\(n) photos mises à la corbeille ; une photo est conservée dans chacune des \(selected.count) séries.")
         }
     }
 
@@ -1645,7 +1652,8 @@ final class PhotoLibrary {
         guard !remove.isEmpty else { dismiss(); return }
         performTrash(remove.map { TrashStep(remove: $0.id, into: keep.first?.id) }) { [self] r in
             dismiss()
-            notice = "\(r.removed.count) photo\(r.removed.count > 1 ? "s" : "") mise\(r.removed.count > 1 ? "s" : "") à la corbeille, \(keep.count) gardée\(keep.count > 1 ? "s" : "")."
+            notice = L(r.removed.count, one: "1 photo mise à la corbeille", other: "\(r.removed.count) photos mises à la corbeille")
+                + ", " + L(keep.count, one: "1 gardée.", other: "\(keep.count) gardées.")
         }
     }
 
@@ -1768,8 +1776,8 @@ final class PhotoLibrary {
         }
         applyManualLocations(changed)
         let skipped = list.filter { !$0.hasLocation }.count - changed.count
-        notice = "\(changed.count) photo(s) localisée(s) d'après les photos prises à moins de 2 h d'intervalle."
-            + (skipped > 0 ? " \(skipped) sans voisine géolocalisée." : "")
+        notice = L("\(changed.count) photo(s) localisée(s) d'après les photos prises à moins de 2 h d'intervalle.")
+            + (skipped > 0 ? L(" \(skipped) sans voisine géolocalisée.") : "")
     }
 
     private func applyManualLocations(_ ids: [String]) {
@@ -1853,7 +1861,7 @@ final class PhotoLibrary {
             Task.detached(priority: .background) {
                 if let data = try? JSONEncoder().encode(state) { try? data.write(to: url, options: .atomic) }
             }
-            if immediately { notice = "\(results.count) fichier(s) XMP écrit(s) ou mis à jour." }
+            if immediately { notice = L("\(results.count) fichier(s) XMP écrit(s) ou mis à jour.") }
         }
     }
 
@@ -1908,7 +1916,7 @@ final class PhotoLibrary {
             UserDefaults.standard.set(true, forKey: "xmpImported")
             isImportingXMP = false
             if located.isEmpty { metadataChanged() } else { applyManualLocations(located) }
-            notice = "\(found.count) fichiers XMP lus : \(photosChanged) photos enrichies (\(people.count) personnes, \(ratings) notes, \(located.count) lieux). Vos fichiers n'ont pas été modifiés."
+            notice = L("\(found.count) fichiers XMP lus : \(photosChanged) photos enrichies (\(people.count) personnes, \(ratings) notes, \(located.count) lieux). Vos fichiers n'ont pas été modifiés.")
         }
     }
 
@@ -2065,7 +2073,7 @@ final class PhotoLibrary {
                 let end = min(start + 64, items.count)
                 let batch = Array(items[start..<end])
                 let checked = await Watchdog.map(batch, width: 4, timeout: 60) { IntegrityChecker.problem($0) }
-                let results = checked.map { $0 ?? "Lecture bloquée (fichier ou disque défaillant ?)" }
+                let results = checked.map { $0 ?? L("Lecture bloquée (fichier ou disque défaillant ?)") }
                 for (p, r) in zip(batch, results) { if let r { found[p.id] = r } }
                 integrityDone = end
                 start = end
@@ -2083,9 +2091,9 @@ final class PhotoLibrary {
             save()
             revision += 1
             notice = completed
-                ? (found.isEmpty ? "Vérification terminée : tous les fichiers sont lisibles."
-                                 : "Vérification terminée : \(found.count) fichier(s) à problème, listés dans « Fichiers abîmés ».")
-                : "Vérification interrompue (\(found.count) problème(s) trouvés jusque-là)."
+                ? (found.isEmpty ? L("Vérification terminée : tous les fichiers sont lisibles.")
+                                 : L("Vérification terminée : \(found.count) fichier(s) à problème, listés dans « Fichiers abîmés »."))
+                : L("Vérification interrompue (\(found.count) problème(s) trouvés jusque-là).")
         }
     }
 
@@ -2100,11 +2108,11 @@ final class PhotoLibrary {
         panel.canChooseDirectories = true
         panel.canChooseFiles = false
         panel.canCreateDirectories = true
-        panel.prompt = "Choisir"
-        panel.message = "Choisissez le dossier de sauvegarde (idéalement sur un autre disque)"
+        panel.prompt = L("Choisir")
+        panel.message = L("Choisissez le dossier de sauvegarde (idéalement sur un autre disque)")
         guard panel.runModal() == .OK, let url = panel.url else { return }
         if root(containing: url.path) != nil || roots.contains(where: { url.path.hasPrefix($0.path) || $0.path.hasPrefix(url.path + "/") }) {
-            notice = "Ce dossier fait partie (ou contient) un dossier analysé : choisissez un emplacement à part, de préférence sur un autre disque."
+            notice = L("Ce dossier fait partie (ou contient) un dossier analysé : choisissez un emplacement à part, de préférence sur un autre disque.")
             return
         }
         backupDestination = url
@@ -2146,7 +2154,7 @@ final class PhotoLibrary {
         guard let plan = backupPlan, let dest = backupDestination, !isBackingUp else { return }
         let free = (try? dest.resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey]).volumeAvailableCapacityForImportantUsage) ?? 0
         if free > 0, free < plan.totalBytes + 200_000_000 {
-            notice = "Pas assez de place sur le disque de sauvegarde : il faut \(ByteCountFormatter.string(fromByteCount: plan.totalBytes, countStyle: .file)), il reste \(ByteCountFormatter.string(fromByteCount: free, countStyle: .file))."
+            notice = L("Pas assez de place sur le disque de sauvegarde : il faut \(ByteCountFormatter.string(fromByteCount: plan.totalBytes, countStyle: .file)), il reste \(ByteCountFormatter.string(fromByteCount: free, countStyle: .file)).")
             return
         }
         isBackingUp = true
@@ -2176,9 +2184,9 @@ final class PhotoLibrary {
                 lastBackup = Date()
                 UserDefaults.standard.set(lastBackup, forKey: "lastBackup")
             }
-            notice = (cancelled ? "Sauvegarde interrompue : " : "Sauvegarde terminée : ")
-                + "\(backupFilesDone - errors) fichier(s) copiés (\(ByteCountFormatter.string(fromByteCount: backupBytesDone, countStyle: .file)))."
-                + (errors > 0 ? " \(errors) erreur(s) : relancez la sauvegarde pour réessayer." : "")
+            notice = (cancelled ? L("Sauvegarde interrompue : ") : L("Sauvegarde terminée : "))
+                + L("\(backupFilesDone - errors) fichier(s) copiés (\(ByteCountFormatter.string(fromByteCount: backupBytesDone, countStyle: .file))).")
+                + (errors > 0 ? L(" \(errors) erreur(s) : relancez la sauvegarde pour réessayer.") : "")
             backupPlan = nil
             planBackup()
         }

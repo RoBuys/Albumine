@@ -11,6 +11,7 @@ struct DateFixSheet: View {
         case shift = "Décaler"
         case set = "Date précise"
         var id: String { rawValue }
+        var title: String { self == .shift ? L("Décaler") : L("Date précise") }
     }
 
     @Etat private var mode: Mode = .shift
@@ -26,20 +27,20 @@ struct DateFixSheet: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
-            Text("Corriger la date de \(photos.count) élément\(photos.count > 1 ? "s" : "")").font(.title3.weight(.semibold))
+            Text(L(photos.count, one: "Corriger la date de 1 élément", other: "Corriger la date de \(photos.count) éléments")).font(.title3.weight(.semibold))
             Picker("", selection: $mode) {
-                ForEach(Mode.allCases) { Text($0.rawValue).tag($0) }
+                ForEach(Mode.allCases) { Text($0.title).tag($0) }
             }
             .pickerStyle(.segmented)
             .labelsHidden()
 
             Form {
                 if mode == .shift {
-                    stepper("Années", $years, -50...50)
-                    stepper("Mois", $months, -11...11)
-                    stepper("Jours", $days, -365...365)
-                    stepper("Heures", $hours, -23...23)
-                    stepper("Minutes", $minutes, -59...59)
+                    stepper(L("Années"), $years, -50...50)
+                    stepper(L("Mois"), $months, -11...11)
+                    stepper(L("Jours"), $days, -365...365)
+                    stepper(L("Heures"), $hours, -23...23)
+                    stepper(L("Minutes"), $minutes, -59...59)
                     Text("Exemple : un appareil resté à l'heure d'hiver → +1 heure ; une date réglée un an trop tôt → +1 année.")
                         .font(.caption).foregroundStyle(.secondary)
                 } else {

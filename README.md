@@ -8,8 +8,9 @@ runs on your Mac.
 
 Tested on a 190,000-item library (photos and videos) on an external drive.
 
-> **Language:** the user interface is in French. Menu and button names below are quoted as they
-> appear in the app, with an English translation.
+> **Language:** the interface is available in **French and English**. It follows your Mac's language;
+> to choose, open Settings (⌘,) › Options › "Langue · Language" and relaunch. Menu and button names
+> below are quoted in French as they appear in the French interface, with an English translation.
 
 ## Install
 
@@ -177,6 +178,12 @@ raw image orientation (before EXIF rotation); Albumine converts them. Hidden `Or
 Environment variables useful for development: `ALBUMINE_HOME` (alternate data folder),
 `ALBUMINE_DEBUG` (log to stderr), `ALBUMINE_AUTOIMPORT` (automatic Picasa import at launch), `ALBUMINE_AUTODUPLICATES` (duplicate search at launch),
 `ALBUMINE_START_VIEW=map` (open the map view at launch).
+
+## Translations
+
+French is the source language: each French text in the code is the key of its translation in
+`Resources/en.lproj/Localizable.strings` (copied into the app by `build.sh`). After adding or changing
+texts, `./Resources/check-translations.sh` lists those without an English translation.
 
 ## Technical note
 

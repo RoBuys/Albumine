@@ -217,17 +217,17 @@ struct PicasaImportSummary: Identifiable {
     var message: String {
         guard photos > 0 else {
             return files == 0
-                ? "Aucun fichier Picasa (.picasa.ini) n'a été trouvé dans vos dossiers."
-                : "\(files) fichiers Picasa lus, mais aucune photo correspondante dans la bibliothèque."
+                ? L("Aucun fichier Picasa (.picasa.ini) n'a été trouvé dans vos dossiers.")
+                : L("\(files) fichiers Picasa lus, mais aucune photo correspondante dans la bibliothèque.")
         }
-        var lines = ["\(files.formatted()) fichiers Picasa lus, \(photos.formatted()) photos enrichies :"]
-        if namedFaces > 0 { lines.append("• \(namedFaces.formatted()) visages nommés (\(people.count) personnes)") }
-        if !albums.isEmpty { lines.append("• \(albums.count) albums") }
-        if rotations > 0 { lines.append("• \(rotations.formatted()) rotations") }
-        if stars > 0 { lines.append("• \(stars) photos étoilées (→ 5 étoiles)") }
-        if captions > 0 { lines.append("• \(captions) légendes") }
-        if edits > 0 { lines.append("• \(edits) retouches (correction auto, noir et blanc, sépia…)") }
-        lines.append("\nVos fichiers n'ont pas été modifiés.")
+        var lines = [L("\(files.formatted()) fichiers Picasa lus, \(photos.formatted()) photos enrichies :")]
+        if namedFaces > 0 { lines.append(L("• \(namedFaces.formatted()) visages nommés (\(people.count) personnes)")) }
+        if !albums.isEmpty { lines.append(L("• \(albums.count) albums")) }
+        if rotations > 0 { lines.append(L("• \(rotations.formatted()) rotations")) }
+        if stars > 0 { lines.append(L("• \(stars) photos étoilées (→ 5 étoiles)")) }
+        if captions > 0 { lines.append(L("• \(captions) légendes")) }
+        if edits > 0 { lines.append(L("• \(edits) retouches (correction auto, noir et blanc, sépia…)")) }
+        lines.append(L("\nVos fichiers n'ont pas été modifiés."))
         return lines.joined(separator: "\n")
     }
 }

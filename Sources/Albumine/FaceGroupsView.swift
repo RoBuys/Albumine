@@ -54,7 +54,7 @@ private struct FaceGroupRow: View {
                 } else {
                     Label("Personne inconnue", systemImage: "person.crop.circle.dashed").font(.headline)
                 }
-                Text("\(group.faces.count) visage\(group.faces.count > 1 ? "s" : "")")
+                Text(L(group.faces.count, one: "1 visage", other: "\(group.faces.count) visages"))
                     .foregroundStyle(.secondary)
                 Spacer()
                 TextField("Nom", text: $name)
@@ -101,7 +101,7 @@ private struct FaceGroupRow: View {
             }
             .frame(height: 80)
             if !excluded.isEmpty {
-                Text("\(excluded.count) visage\(excluded.count > 1 ? "s" : "") écarté\(excluded.count > 1 ? "s" : "") : \(excluded.count > 1 ? "ils resteront" : "il restera") à nommer.")
+                Text(L(excluded.count, one: "1 visage écarté : il restera à nommer.", other: "\(excluded.count) visages écartés : ils resteront à nommer."))
                     .font(.caption).foregroundStyle(.secondary)
             }
         }

@@ -122,8 +122,8 @@ struct SlideshowView: View {
     private func chooseMusic() {
         let panel = NSOpenPanel()
         panel.allowedContentTypes = [.audio]
-        panel.message = "Choisissez un morceau pour accompagner le diaporama"
-        panel.prompt = "Choisir"
+        panel.message = L("Choisissez un morceau pour accompagner le diaporama")
+        panel.prompt = L("Choisir")
         if let last = UserDefaults.standard.string(forKey: "slideshowMusicFolder") {
             panel.directoryURL = URL(fileURLWithPath: last)
         }

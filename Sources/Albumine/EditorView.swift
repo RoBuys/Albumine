@@ -18,6 +18,15 @@ struct EditorView: View {
     enum CropAspect: String, CaseIterable, Identifiable {
         case free = "Libre", original = "Original", square = "Carré", r43 = "4:3", r32 = "3:2", r169 = "16:9", portrait = "Portrait 3:4"
         var id: String { rawValue }
+        var title: String {
+            switch self {
+            case .free: return L("Libre")
+            case .original: return L("Original")
+            case .square: return L("Carré")
+            case .portrait: return L("Portrait 3:4")
+            default: return rawValue
+            }
+        }
         func ratio(original: Double) -> Double? {
             switch self {
             case .free: return nil
@@ -97,32 +106,32 @@ struct EditorView: View {
                     .toggleStyle(.button)
                     .help("Corrections automatiques (exposition, couleurs, contraste)")
 
-                    group("Lumière") {
-                        slider("Exposition", $draft.exposure, -2...2)
-                        slider("Contraste", $draft.contrast, -1...1)
-                        slider("Hautes lumières", $draft.highlights, -1...1)
-                        slider("Ombres", $draft.shadows, -1...1)
+                    group(L("Lumière")) {
+                        slider(L("Exposition"), $draft.exposure, -2...2)
+                        slider(L("Contraste"), $draft.contrast, -1...1)
+                        slider(L("Hautes lumières"), $draft.highlights, -1...1)
+                        slider(L("Ombres"), $draft.shadows, -1...1)
                     }
-                    group("Couleur") {
-                        slider("Saturation", $draft.saturation, -1...1)
-                        slider("Chaleur", $draft.warmth, -1...1)
+                    group(L("Couleur")) {
+                        slider(L("Saturation"), $draft.saturation, -1...1)
+                        slider(L("Chaleur"), $draft.warmth, -1...1)
                     }
-                    group("Filtre") {
+                    group(L("Filtre")) {
                         LazyVGrid(columns: [GridItem(.adaptive(minimum: 80), spacing: 6)], spacing: 6) {
                             ForEach(PhotoEdits.Filter.allCases) { f in
-                                Button(f.rawValue) { draft.filter = f }
+                                Button(f.title) { draft.filter = f }
                                     .buttonStyle(.bordered)
                                     .tint(draft.filter == f ? .accentColor : nil)
                                     .controlSize(.small)
                             }
                         }
                     }
-                    group("Cadrage") {
-                        slider("Redresser", $draft.straighten, -15...15, format: "%.1f°")
+                    group(L("Cadrage")) {
+                        slider(L("Redresser"), $draft.straighten, -15...15, format: "%.1f°")
                         Toggle("Recadrer", isOn: $cropping)
                         if cropping {
                             Picker("Format", selection: $aspect) {
-                                ForEach(CropAspect.allCases) { Text($0.rawValue).tag($0) }
+                                ForEach(CropAspect.allCases) { Text($0.title).tag($0) }
                             }
                             .onChange(of: aspect) { applyAspect() }
                         }

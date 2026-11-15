@@ -100,13 +100,13 @@ final class Updater {
                 showSheet = true
             } else if manual {
                 available = nil
-                upToDateMessage = "Albumine \(Self.currentVersion) est la version la plus récente."
+                upToDateMessage = L("Albumine \(Self.currentVersion) est la version la plus récente.")
                 showSheet = true
             }
         } catch {
             Debug.log("mise à jour : vérification impossible — \(error)")
             if manual {
-                phase = .failed("Impossible de vérifier les mises à jour : \(error.localizedDescription)")
+                phase = .failed(L("Impossible de vérifier les mises à jour : \(error.localizedDescription)"))
                 showSheet = true
             }
         }
@@ -120,7 +120,7 @@ final class Updater {
         request.timeoutInterval = 20
         let (data, response) = try await URLSession.shared.data(for: request)
         if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
-            throw UpdateError("réponse \(http.statusCode) du serveur")
+            throw UpdateError(L("réponse \(http.statusCode) du serveur"))
         }
         struct Asset: Decodable { let name: String; let browser_download_url: URL }
         struct GitHubRelease: Decodable {
@@ -134,7 +134,7 @@ final class Updater {
         let r = try JSONDecoder().decode(GitHubRelease.self, from: data)
         let version = r.tag_name.hasPrefix("v") ? String(r.tag_name.dropFirst()) : r.tag_name
         guard let zip = r.assets.first(where: { $0.name == "Albumine-\(version).zip" }) else {
-            throw UpdateError("la version \(version) ne contient pas d'archive installable")
+            throw UpdateError(L("la version \(version) ne contient pas d'archive installable"))
         }
         let sig = r.assets.first { $0.name == zip.name + ".sig" }
         return Release(version: version, notes: r.body ?? "", page: r.html_url,
@@ -170,14 +170,14 @@ final class Updater {
             Debug.log("mise à jour : archive téléchargée")
 
             // 1. Signature from the author (Ed25519).
-            guard let sigURL = release.signature else { throw UpdateError("archive non signée : installation refusée") }
+            guard let sigURL = release.signature else { throw UpdateError(L("archive non signée : installation refusée")) }
             let (sigData, _) = try await URLSession.shared.data(from: sigURL)
             let sigText = String(decoding: sigData, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
             guard let signature = Data(base64Encoded: sigText),
                   let keyData = Data(base64Encoded: Self.trustedPublicKey),
                   let key = try? Curve25519.Signing.PublicKey(rawRepresentation: keyData),
                   key.isValidSignature(signature, for: try Data(contentsOf: zip)) else {
-                throw UpdateError("la signature de l'archive est invalide : installation refusée")
+                throw UpdateError(L("la signature de l'archive est invalide : installation refusée"))
             }
 
             Debug.log("mise à jour : signature valide")
@@ -189,7 +189,7 @@ final class Updater {
             guard let info = NSDictionary(contentsOf: newApp.appendingPathComponent("Contents/Info.plist")),
                   info["CFBundleIdentifier"] as? String == Bundle.main.bundleIdentifier,
                   info["CFBundleShortVersionString"] as? String == release.version else {
-                throw UpdateError("l'archive ne contient pas Albumine \(release.version)")
+                throw UpdateError(L("l'archive ne contient pas Albumine \(release.version)"))
             }
             try await Self.runTool("/usr/bin/codesign", ["--verify", "--deep", newApp.path])
 
@@ -199,7 +199,7 @@ final class Updater {
             let parent = target.deletingLastPathComponent()
             guard FileManager.default.isWritableFile(atPath: parent.path) else {
                 NSWorkspace.shared.activateFileViewerSelecting([newApp])
-                throw UpdateError("pas le droit d'écrire dans « \(parent.path) ». La nouvelle version est affichée dans le Finder : glissez-la vous-même dans Applications.")
+                throw UpdateError(L("pas le droit d'écrire dans « \(parent.path) ». La nouvelle version est affichée dans le Finder : glissez-la vous-même dans Applications."))
             }
             let script = work.appendingPathComponent("install.sh")
             try """
@@ -255,7 +255,7 @@ final class Updater {
         }
         let (temp, response) = try await URLSession.shared.download(from: url)
         if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
-            throw UpdateError("téléchargement impossible (réponse \(http.statusCode))")
+            throw UpdateError(L("téléchargement impossible (réponse \(http.statusCode))"))
         }
         try FileManager.default.moveItem(at: temp, to: destination)
         return destination
@@ -270,7 +270,7 @@ final class Updater {
             p.standardError = Pipe()
             try p.run()
             p.waitUntilExit()
-            if p.terminationStatus != 0 { throw UpdateError("vérification de l'archive échouée (\((path as NSString).lastPathComponent))") }
+            if p.terminationStatus != 0 { throw UpdateError(L("vérification de l'archive échouée (\((path as NSString).lastPathComponent))")) }
         }.value
     }
 

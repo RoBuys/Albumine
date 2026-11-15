@@ -144,11 +144,43 @@ struct FoldersSettings: View {
 
 /// General options.
 struct OptionsSettings: View {
+    /// Saves everything, quits and opens Albumine again (to apply a language change).
+    static func relaunch() {
+        NotificationCenter.default.post(name: .albumineWillQuitForUpdate, object: nil)
+        let path = Bundle.main.bundlePath.replacingOccurrences(of: "'", with: "'\\''")
+        let p = Process()
+        p.executableURL = URL(fileURLWithPath: "/bin/sh")
+        p.arguments = ["-c", "(while kill -0 \(ProcessInfo.processInfo.processIdentifier) 2>/dev/null; do sleep 0.2; done; /usr/bin/open '\(path)') >/dev/null 2>&1 &"]
+        try? p.run()
+        p.waitUntilExit()
+        NSApp.terminate(nil)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 3) { exit(0) }
+    }
+
     @Environment(PhotoLibrary.self) private var library
     @AppStorage("updateAutomatic") private var autoUpdate = true
+    @Etat private var language = AppLanguage.chosen
+    /// Language in use when the window opened: a different choice needs a relaunch.
+    @Etat private var languageAtLaunch = AppLanguage.chosen
 
     var body: some View {
         Form {
+            Section {
+                Picker("Langue", selection: $language) {
+                    ForEach(AppLanguage.allCases) { Text($0.title).tag($0) }
+                }
+                .onChange(of: language) { AppLanguage.chosen = language }
+                if language != languageAtLaunch {
+                    HStack {
+                        Text("La nouvelle langue s'appliquera au prochain lancement d'Albumine.")
+                            .font(.caption).foregroundStyle(.secondary)
+                        Spacer()
+                        Button("Relancer maintenant") { Self.relaunch() }
+                    }
+                }
+            } header: {
+                Text("Langue · Language")
+            }
             Section("Mises à jour") {
                 LabeledContent("Version installée") { Text(Updater.currentVersion) }
                 Toggle("Rechercher automatiquement les mises à jour", isOn: $autoUpdate)
@@ -284,7 +316,7 @@ struct BackupSettings: View {
             Section("Sauvegarde") {
                 LabeledContent("Destination") {
                     HStack {
-                        Text(library.backupDestination?.path ?? "Aucune")
+                        Text(library.backupDestination?.path ?? L("Aucune"))
                             .lineLimit(1).truncationMode(.middle)
                             .foregroundStyle(library.backupDestination == nil ? .secondary : .primary)
                         Button("Choisir…") { library.chooseBackupDestination() }
@@ -297,7 +329,7 @@ struct BackupSettings: View {
                         .font(.caption).foregroundStyle(.orange)
                 }
                 LabeledContent("Dernière sauvegarde") {
-                    Text(library.lastBackup.map { $0.formatted(date: .long, time: .shortened) } ?? "Jamais")
+                    Text(library.lastBackup.map { $0.formatted(date: .long, time: .shortened) } ?? L("Jamais"))
                 }
                 if library.isPlanningBackup {
                     HStack { ProgressView().controlSize(.small); Text("Comparaison avec la sauvegarde…").font(.caption) }
@@ -329,7 +361,7 @@ struct BackupSettings: View {
             }
             Section("Intégrité des fichiers") {
                 LabeledContent("Dernière vérification") {
-                    Text(library.lastIntegrityCheck.map { $0.formatted(date: .long, time: .shortened) } ?? "Jamais")
+                    Text(library.lastIntegrityCheck.map { $0.formatted(date: .long, time: .shortened) } ?? L("Jamais"))
                 }
                 LabeledContent("Fichiers à problème") {
                     Text(library.damaged.isEmpty ? "Aucun" : "\(library.damaged.count) (voir « Fichiers abîmés » dans la barre latérale)")

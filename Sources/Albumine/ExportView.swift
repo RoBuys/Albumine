@@ -24,7 +24,7 @@ struct ExportSheet: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
-            Text("Exporter \(photos.count) élément\(photos.count > 1 ? "s" : "")").font(.title3.weight(.semibold))
+            Text(L(photos.count, one: "Exporter 1 élément", other: "Exporter \(photos.count) éléments")).font(.title3.weight(.semibold))
             Form {
                 Picker("Taille", selection: $options.maxPixel) {
                     Text("Originale").tag(Int?.none)
@@ -72,8 +72,8 @@ struct ExportSheet: View {
         panel.canChooseDirectories = true
         panel.canChooseFiles = false
         panel.canCreateDirectories = true
-        panel.prompt = "Exporter ici"
-        panel.message = "Choisissez le dossier de destination"
+        panel.prompt = L("Exporter ici")
+        panel.message = L("Choisissez le dossier de destination")
         guard panel.runModal() == .OK, let folder = panel.url else { return }
         let items = photos.filter { !$0.offline }.map { ($0, library.rotation(of: $0), library.edits(of: $0)) }
         let opts = options
@@ -90,8 +90,8 @@ struct ExportSheet: View {
             }
             running = false
             NSWorkspace.shared.activateFileViewerSelecting([folder])
-            library.notice = "\(done - failures) élément(s) exporté(s) dans « \(folder.lastPathComponent) »."
-                + (failures > 0 ? " \(failures) échec(s)." : "")
+            library.notice = L("\(done - failures) élément(s) exporté(s) dans « \(folder.lastPathComponent) ».")
+                + (failures > 0 ? L(" \(failures) échec(s).") : "")
             dismiss()
         }
     }

@@ -254,10 +254,10 @@ struct SidebarView: View {
     private func smartSummary(_ a: SmartAlbum) -> String {
         var parts: [String] = []
         if !a.query.isEmpty { parts.append("« \(a.query) »") }
-        if a.minRating > 0 { parts.append(String(repeating: "★", count: a.minRating) + " et plus") }
+        if a.minRating > 0 { parts.append(String(repeating: "★", count: a.minRating) + L(" et plus")) }
         if let f = a.yearFrom, let t = a.yearTo { parts.append(f == t ? String(f) : "\(f) – \(t)") }
-        else if let f = a.yearFrom { parts.append("depuis \(f)") }
-        else if let t = a.yearTo { parts.append("jusqu'à \(t)") }
+        else if let f = a.yearFrom { parts.append(L("depuis \(f)")) }
+        else if let t = a.yearTo { parts.append(L("jusqu'à \(t)")) }
         return parts.joined(separator: " · ")
     }
 
@@ -265,17 +265,17 @@ struct SidebarView: View {
     private var status: some View {
         VStack(alignment: .leading, spacing: 6) {
             if library.isImportingPicasa {
-                progressRow("Import Picasa…", value: nil)
+                progressRow(L("Import Picasa…"), value: nil)
             }
             if library.isScanning {
-                progressRow("Analyse des dossiers…", value: nil)
+                progressRow(L("Analyse des dossiers…"), value: nil)
             } else if library.isReadingExif {
-                progressRow("Dates et lieux \(library.exifDone.formatted()) / \(library.exifTotal.formatted())",
+                progressRow(L("Dates et lieux \(library.exifDone.formatted()) / \(library.exifTotal.formatted())"),
                             value: Double(library.exifDone) / Double(max(library.exifTotal, 1)))
                     .help("Lecture des dates de prise de vue et du GPS en arrière-plan.")
             }
             if library.isFindingDuplicates {
-                progressRow("Doublons \(library.duplicateDone.formatted()) / \(library.duplicateTotal.formatted())",
+                progressRow(L("Doublons \(library.duplicateDone.formatted()) / \(library.duplicateTotal.formatted())"),
                             value: Double(library.duplicateDone) / Double(max(library.duplicateTotal, 1)))
             }
             if library.isAnalyzingContent || library.contentPaused {
@@ -283,7 +283,7 @@ struct SidebarView: View {
                     if library.contentPaused {
                         Text("Analyse du contenu en pause").font(.caption2).foregroundStyle(.secondary)
                     } else {
-                        progressRow("Contenu \(library.contentDone.formatted()) / \(library.contentTotal.formatted())",
+                        progressRow(L("Contenu \(library.contentDone.formatted()) / \(library.contentTotal.formatted())"),
                                     value: Double(library.contentDone) / Double(max(library.contentTotal, 1)))
                     }
                     Button { library.toggleContentPause() } label: {
@@ -294,13 +294,13 @@ struct SidebarView: View {
                 }
             }
             if library.isFindingPlaces {
-                progressRow("Lieux \(library.placeDone.formatted()) / \(library.placeTotal.formatted())",
+                progressRow(L("Lieux \(library.placeDone.formatted()) / \(library.placeTotal.formatted())"),
                             value: Double(library.placeDone) / Double(max(library.placeTotal, 1)))
                     .help("Recherche des noms de lieux (service Apple, une zone à la fois).")
             }
             if library.isCheckingIntegrity {
                 HStack {
-                    progressRow("Vérification \(library.integrityDone.formatted()) / \(library.integrityTotal.formatted())",
+                    progressRow(L("Vérification \(library.integrityDone.formatted()) / \(library.integrityTotal.formatted())"),
                                 value: Double(library.integrityDone) / Double(max(library.integrityTotal, 1)))
                     Button { library.cancelIntegrityCheck() } label: { Image(systemName: "stop.circle") }
                         .buttonStyle(.borderless)
@@ -308,30 +308,30 @@ struct SidebarView: View {
             }
             if library.isBackingUp, let plan = library.backupPlan {
                 HStack {
-                    progressRow("Sauvegarde \(ByteCountFormatter.string(fromByteCount: library.backupBytesDone, countStyle: .file)) / \(ByteCountFormatter.string(fromByteCount: plan.totalBytes, countStyle: .file))",
+                    progressRow(L("Sauvegarde \(ByteCountFormatter.string(fromByteCount: library.backupBytesDone, countStyle: .file)) / \(ByteCountFormatter.string(fromByteCount: plan.totalBytes, countStyle: .file))"),
                                 value: Double(library.backupBytesDone) / Double(max(plan.totalBytes, 1)))
                     Button { library.cancelBackup() } label: { Image(systemName: "stop.circle") }
                         .buttonStyle(.borderless)
                 }
             }
             if library.isWritingXMP {
-                progressRow("Écriture des fichiers XMP…", value: nil)
+                progressRow(L("Écriture des fichiers XMP…"), value: nil)
             }
             if library.isImportingXMP {
-                progressRow("Import des fichiers XMP…", value: nil)
+                progressRow(L("Import des fichiers XMP…"), value: nil)
             }
             if !library.offlineRoots.isEmpty {
                 Label("Disque débranché (lecture seule)", systemImage: "externaldrive.badge.xmark")
                     .font(.caption2).foregroundStyle(.orange)
             }
             if library.isTrashing {
-                progressRow("Mise à la corbeille…", value: nil)
+                progressRow(L("Mise à la corbeille…"), value: nil)
             }
             if library.facePreparing {
-                progressRow("Visages : préparation des exemples…", value: nil)
+                progressRow(L("Visages : préparation des exemples…"), value: nil)
             } else if library.isAnalyzingFaces {
                 HStack {
-                    progressRow("Visages \(library.faceDone.formatted()) / \(library.faceTotal.formatted())",
+                    progressRow(L("Visages \(library.faceDone.formatted()) / \(library.faceTotal.formatted())"),
                                 value: Double(library.faceDone) / Double(max(library.faceTotal, 1)))
                     Button { library.cancelFaceAnalysis() } label: { Image(systemName: "stop.circle") }
                         .buttonStyle(.borderless)

@@ -67,7 +67,7 @@ struct InspectorView: View {
     private var ratingSection: some View {
         let ratings = Set(photos.map { library.rating(of: $0) })
         return VStack(alignment: .leading, spacing: 6) {
-            sectionTitle(photos.count > 1 && ratings.count > 1 ? "Note (différente selon les photos)" : "Note")
+            sectionTitle(photos.count > 1 && ratings.count > 1 ? L("Note (différente selon les photos)") : L("Note"))
             StarRatingPicker(rating: ratings.count == 1 ? ratings.first! : 0, size: 18) { n in
                 library.setRating(n, for: photos)
             }
@@ -76,7 +76,7 @@ struct InspectorView: View {
 
     private func captionSection(_ photo: Photo) -> some View {
         VStack(alignment: .leading, spacing: 6) {
-            sectionTitle("Légende")
+            sectionTitle(L("Légende"))
             TextField("Ajouter une légende", text: $captionDraft, axis: .vertical)
                 .textFieldStyle(.roundedBorder)
                 .lineLimit(1...4)
@@ -90,7 +90,7 @@ struct InspectorView: View {
         let faces = library.faces(of: photo)
         if !faces.isEmpty {
             VStack(alignment: .leading, spacing: 8) {
-                sectionTitle("Visages (\(faces.count))")
+                sectionTitle(L("Visages (\(faces.count))"))
                 ForEach(Array(faces.enumerated()), id: \.offset) { i, face in
                     HStack(spacing: 8) {
                         FaceCropView(url: photo.url, rect: library.faceRect(face, in: photo),
@@ -158,7 +158,7 @@ struct InspectorView: View {
         }.sorted { $0.localizedStandardCompare($1) == .orderedAscending }
         if !union.isEmpty {
             VStack(alignment: .leading, spacing: 8) {
-                sectionTitle("Personnes")
+                sectionTitle(L("Personnes"))
                 FlowLayout {
                     ForEach(union, id: \.self) { name in
                         TagChip(name: name, systemImage: "person.fill") {
@@ -176,7 +176,7 @@ struct InspectorView: View {
             .sorted { $0.localizedStandardCompare($1) == .orderedAscending }
         if !union.isEmpty {
             VStack(alignment: .leading, spacing: 6) {
-                sectionTitle("Albums")
+                sectionTitle(L("Albums"))
                 ForEach(union, id: \.self) { Label($0, systemImage: "rectangle.stack").font(.callout) }
             }
         }
@@ -190,11 +190,11 @@ struct InspectorView: View {
         let suggestions = library.allTags.map(\.name).filter { !common.contains($0) }
 
         return VStack(alignment: .leading, spacing: 8) {
-            sectionTitle("Étiquettes")
+            sectionTitle(L("Étiquettes"))
             if !shown.isEmpty {
                 FlowLayout {
                     ForEach(shown, id: \.self) { tag in
-                        TagChip(name: common.contains(tag) ? tag : "\(tag) (partiel)") {
+                        TagChip(name: common.contains(tag) ? tag : L("\(tag) (partiel)")) {
                             library.removeTag(tag, from: photos)
                         }
                     }
@@ -229,11 +229,11 @@ struct InspectorView: View {
         let reason = library.rejectReason(of: photo)
         if !labels.isEmpty || reason != nil || library.recognizedText(of: photo) != nil {
             VStack(alignment: .leading, spacing: 8) {
-                sectionTitle("Contenu reconnu")
+                sectionTitle(L("Contenu reconnu"))
                 if !labels.isEmpty {
                     FlowLayout {
                         ForEach(labels, id: \.self) { id in
-                            Text(ContentLabels.french(id))
+                            Text(ContentLabels.display(id))
                                 .font(.caption)
                                 .padding(.horizontal, 7)
                                 .padding(.vertical, 2)
@@ -249,7 +249,7 @@ struct InspectorView: View {
                 }
                 if let reason {
                     HStack {
-                        Label("Semble ratée : \(reason.rawValue.lowercased())", systemImage: "hand.thumbsdown")
+                        Label("Semble ratée : \(reason.title.lowercased())", systemImage: "hand.thumbsdown")
                             .font(.caption).foregroundStyle(.orange)
                         Spacer()
                         Button("Ce n'est pas raté") { library.markQualityOK([photo]) }
@@ -263,27 +263,27 @@ struct InspectorView: View {
 
     private func infoSection(_ photo: Photo) -> some View {
         VStack(alignment: .leading, spacing: 6) {
-            sectionTitle("Informations")
+            sectionTitle(L("Informations"))
             Grid(alignment: .leading, horizontalSpacing: 10, verticalSpacing: 5) {
                 if library.hasDateOverride(photo) {
-                    row("Date", (library.photo(id: photo.id)?.date ?? photo.date).formatted(date: .abbreviated, time: .shortened) + " (corrigée)")
+                    row(L("Date"), (library.photo(id: photo.id)?.date ?? photo.date).formatted(date: .abbreviated, time: .shortened) + L(" (corrigée)"))
                 } else {
-                    row("Date", (info?.dateTaken ?? photo.date).formatted(date: .abbreviated, time: .shortened))
+                    row(L("Date"), (info?.dateTaken ?? photo.date).formatted(date: .abbreviated, time: .shortened))
                 }
                 if let w = info?.pixelWidth, let h = info?.pixelHeight {
                     let mp = Double(w * h) / 1_000_000
                     row("Dimensions", "\(w) × \(h) (\(mp.formatted(.number.precision(.fractionLength(1)))) Mpx)")
                 }
-                row("Taille", ByteCountFormatter.string(fromByteCount: photo.fileSize, countStyle: .file))
-                if let camera = info?.camera { row("Appareil", camera) }
-                if let lens = info?.lens { row("Objectif", lens) }
-                if let settings = shootingSettings { row("Réglages", settings) }
+                row(L("Taille"), ByteCountFormatter.string(fromByteCount: photo.fileSize, countStyle: .file))
+                if let camera = info?.camera { row(L("Appareil"), camera) }
+                if let lens = info?.lens { row(L("Objectif"), lens) }
+                if let settings = shootingSettings { row(L("Réglages"), settings) }
                 if let place = library.place(of: photo) {
-                    row("Lieu", place.label + (library.hasManualLocation(photo) ? " (ajouté)" : ""))
+                    row(L("Lieu"), place.label + (library.hasManualLocation(photo) ? L(" (ajouté)") : ""))
                 } else if library.hasManualLocation(photo) {
-                    row("Lieu", "ajouté à la main")
+                    row(L("Lieu"), L("ajouté à la main"))
                 }
-                row("Dossier", photo.folderName)
+                row(L("Dossier"), photo.folderName)
             }
             .font(.callout)
 

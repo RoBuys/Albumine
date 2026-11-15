@@ -212,6 +212,15 @@ enum PhotoGrouping: String, CaseIterable, Identifiable {
     case year = "Par année"
     case event = "Par événement"
     var id: String { rawValue }
+    var title: String {
+        switch self {
+        case .none: return L("Sans regroupement")
+        case .folder: return L("Par dossier")
+        case .month: return L("Par mois")
+        case .year: return L("Par année")
+        case .event: return L("Par événement")
+        }
+    }
 }
 
 /// Grid section: a contiguous range of the displayed list.
@@ -228,6 +237,13 @@ enum PhotoSort: String, CaseIterable, Identifiable {
     case oldest = "Date (anciennes d'abord)"
     case name = "Nom"
     var id: String { rawValue }
+    var title: String {
+        switch self {
+        case .newest: return L("Date (récentes d'abord)")
+        case .oldest: return L("Date (anciennes d'abord)")
+        case .name: return L("Nom")
+        }
+    }
 }
 
 /// Detailed EXIF information, read on demand for the inspector.

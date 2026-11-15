@@ -163,6 +163,16 @@ enum RejectReason: String, CaseIterable {
     case utility = "Captures d'écran et documents"
     case poor = "Peu réussies"
 
+    var title: String {
+        switch self {
+        case .blurry: return L("Floues")
+        case .dark: return L("Trop sombres")
+        case .bright: return L("Surexposées")
+        case .utility: return L("Captures d'écran et documents")
+        case .poor: return L("Peu réussies")
+        }
+    }
+
     /// Thresholds calibrated on 400 photos of a real library (≈ 1–2 % of photos per criterion).
     static var blurThreshold: Float = 65
     static var darkThreshold: Float = 0.09

@@ -32,9 +32,9 @@ struct DuplicateFoldersView: View {
 
     private var confirmTitle: String {
         guard let p = pending else { return "" }
-        if p.pair.isInternal { return "Garder une seule copie de \(p.pair.count.formatted()) fichiers dans « \(name(p.keep)) » ?" }
+        if p.pair.isInternal { return L("Garder une seule copie de \(p.pair.count.formatted()) fichiers dans « \(name(p.keep)) » ?") }
         let other = p.keep == p.pair.a ? p.pair.b : p.pair.a
-        return "Mettre à la corbeille les \(p.pair.count.formatted()) copies de « \(name(other)) » ?"
+        return L("Mettre à la corbeille les \(p.pair.count.formatted()) copies de « \(name(other)) » ?")
     }
 
     private func name(_ path: String) -> String { (path as NSString).lastPathComponent }

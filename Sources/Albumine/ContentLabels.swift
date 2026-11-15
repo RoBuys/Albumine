@@ -4,7 +4,23 @@ import Foundation
 /// Categories missing from this table remain searchable by their English name.
 enum ContentLabels {
     static func french(_ id: String) -> String {
-        names[id] ?? id.replacingOccurrences(of: "_", with: " ")
+        names[id] ?? english(id)
+    }
+
+    /// Vision identifiers are English: "blue_sky" → "blue sky", "chair_other" → "chair".
+    static func english(_ id: String) -> String {
+        (id.hasSuffix("_other") ? String(id.dropLast(6)) : id).replacingOccurrences(of: "_", with: " ")
+    }
+
+    /// Name shown in the interface, in the app's language. Both languages are always searchable.
+    static func display(_ id: String) -> String {
+        AppLanguage.isFrench ? french(id) : english(id)
+    }
+
+    /// Names offered as search suggestions, in the app's language.
+    static var suggestionNames: [String] {
+        AppLanguage.isFrench ? Array(Set(names.values)).sorted()
+                             : Array(Set(names.keys.filter { !ignored.contains($0) }.map(english))).sorted()
     }
 
     /// Normalized text searched against (French + English + synonyms).

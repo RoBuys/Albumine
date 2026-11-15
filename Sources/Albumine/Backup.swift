@@ -84,16 +84,16 @@ enum BackupEngine {
 enum IntegrityChecker {
     static func problem(_ photo: Photo) -> String? {
         let url = photo.url
-        guard let handle = try? FileHandle(forReadingFrom: url) else { return "Illisible (accès impossible)" }
+        guard let handle = try? FileHandle(forReadingFrom: url) else { return L("Illisible (accès impossible)") }
         defer { try? handle.close() }
         let size = (try? handle.seekToEnd()) ?? 0
-        if size == 0 { return "Fichier vide" }
+        if size == 0 { return L("Fichier vide") }
         let ext = url.pathExtension.lowercased()
 
         if ext == "jpg" || ext == "jpeg" {
             try? handle.seek(toOffset: 0)
             let head = (try? handle.read(upToCount: 3)) ?? Data()
-            if head != Data([0xFF, 0xD8, 0xFF]) { return "Pas un JPEG valide" }
+            if head != Data([0xFF, 0xD8, 0xFF]) { return L("Pas un JPEG valide") }
             // A JPEG ends with FF D9 (data may follow it, so we search near the end).
             let tailSize = min(UInt64(65536), size)
             try? handle.seek(toOffset: size - tailSize)
@@ -104,19 +104,19 @@ enum IntegrityChecker {
                 for i in stride(from: b.count - 2, through: 0, by: -1) where b[i] == 0xFF && b[i + 1] == 0xD9 { return true }
                 return false
             }
-            return hasEnd ? nil : "Fichier tronqué (fin manquante)"
+            return hasEnd ? nil : L("Fichier tronqué (fin manquante)")
         }
 
         if PhotoScanner.videoExtensions.contains(ext) {
             // Only formats macOS can read are checkable (not AVI/WMV…).
             guard ["mov", "mp4", "m4v", "3gp"].contains(ext) else { return nil }
-            return AVURLAsset(url: url).tracks.isEmpty ? "Vidéo illisible" : nil
+            return AVURLAsset(url: url).tracks.isEmpty ? L("Vidéo illisible") : nil
         }
 
-        guard let source = CGImageSourceCreateWithURL(url as CFURL, nil) else { return "Format illisible" }
-        if CGImageSourceGetCount(source) == 0 { return "Format illisible" }
+        guard let source = CGImageSourceCreateWithURL(url as CFURL, nil) else { return L("Format illisible") }
+        if CGImageSourceGetCount(source) == 0 { return L("Format illisible") }
         let status = CGImageSourceGetStatus(source)
-        if status != .statusComplete { return status == .statusIncomplete ? "Fichier tronqué" : "Format illisible" }
+        if status != .statusComplete { return status == .statusIncomplete ? L("Fichier tronqué") : L("Format illisible") }
         return nil
     }
 }
