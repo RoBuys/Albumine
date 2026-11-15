@@ -268,6 +268,12 @@ struct ContentView: View {
             viewerList = nil
             sidebar = .map
             await snap("7-map", wait: 4)
+        case "video":
+            sidebar = .videos
+            try? await Task.sleep(for: .seconds(1.5))
+            if let v = visible.first { open(visible, at: 0); Debug.log("vidéo ouverte : \(v.name)") }
+            await snap("video", wait: 5)
+            Debug.log("lecteur vidéo affiché sans plantage")
         case "inspectzero":
             sidebar = .all
             try? await Task.sleep(for: .seconds(1.5))

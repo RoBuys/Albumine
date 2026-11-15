@@ -251,7 +251,7 @@ struct VideoPane: View {
     var body: some View {
         Group {
             if let player, playable == true {
-                VideoPlayer(player: player)
+                PlayerView(player: player)
             } else if playable == false {
                 VStack(spacing: 12) {
                     Image(systemName: "film").font(.system(size: 48))
@@ -274,6 +274,12 @@ struct VideoPane: View {
                 let p = AVPlayer(url: url)
                 player = p
                 p.play()
+                #if DEBUG
+                if ProcessInfo.processInfo.environment["ALBUMINE_SCENARIO"] == "video" {
+                    try? await Task.sleep(for: .seconds(3))
+                    Debug.log("lecture : statut \(p.currentItem?.status.rawValue ?? -1), position \(p.currentTime().seconds) s, vitesse \(p.rate)")
+                }
+                #endif
             }
         }
         .onDisappear { player?.pause() }
@@ -307,5 +313,29 @@ struct FaceOverlay: View {
             }
         }
         .allowsHitTesting(false)
+    }
+}
+
+/// AppKit video player (the QuickTime-style controls). SwiftUI's VideoPlayer is not used: its type
+/// fails to load on recent macOS versions with this build setup, which made Albumine quit as soon
+/// as a video was opened.
+struct PlayerView: NSViewRepresentable {
+    let player: AVPlayer
+
+    func makeNSView(context: Context) -> AVPlayerView {
+        let view = AVPlayerView()
+        view.controlsStyle = .floating
+        view.showsFullScreenToggleButton = true
+        view.player = player
+        return view
+    }
+
+    func updateNSView(_ view: AVPlayerView, context: Context) {
+        if view.player !== player { view.player = player }
+    }
+
+    static func dismantleNSView(_ view: AVPlayerView, coordinator: ()) {
+        view.player?.pause()
+        view.player = nil
     }
 }
